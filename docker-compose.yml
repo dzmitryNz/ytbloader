@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - SERVER_PORT=8080
+      - DB_PATH=/app/data/ytbloader.db
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - MATTERMOST_URL=${MATTERMOST_URL}
+      - MATTERMOST_BOT_TOKEN=${MATTERMOST_BOT_TOKEN}
+      - YTDLP_PATH=yt-dlp
+      - YTDLP_OUTPUT_DIR=/app/data/downloads
+    restart: unless-stopped
