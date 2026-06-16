@@ -18,6 +18,8 @@ type Download struct {
 	Title       string
 	Status      string
 	OutputPath  string
+	Size        int64
+	ErrorMsg    string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	MessengerID string
@@ -133,6 +135,9 @@ func (db *DB) migrate() error {
 		}
 	}
 
+	db.conn.Exec(`ALTER TABLE downloads ADD COLUMN size INTEGER DEFAULT 0`)
+	db.conn.Exec(`ALTER TABLE downloads ADD COLUMN error_msg TEXT DEFAULT ''`)
+
 	return nil
 }
 
@@ -161,18 +166,63 @@ func (db *DB) UpdateDownloadStatus(id int64, status string) error {
 	return err
 }
 
+func (db *DB) UpdateDownloadResult(id int64, title, outputPath, status string, size int64) error {
+	_, err := db.conn.Exec(
+		`UPDATE downloads SET title = ?, output_path = ?, status = ?, size = ?, error_msg = '', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		title, outputPath, status, size, id,
+	)
+	return err
+}
+
+func (db *DB) UpdateDownloadError(id int64, status, errMsg string) error {
+	_, err := db.conn.Exec(
+		`UPDATE downloads SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		status, errMsg, id,
+	)
+	return err
+}
+
 func (db *DB) GetDownload(id int64) (*Download, error) {
 	d := &Download{}
 	var sendFile int
 	err := db.conn.QueryRow(
-		`SELECT id, url, title, status, output_path, created_at, updated_at, messenger_id, user_id, chat_id, send_file 
+		`SELECT id, url, title, status, output_path, size, error_msg, created_at, updated_at, messenger_id, user_id, chat_id, send_file 
 		 FROM downloads WHERE id = ?`, id,
-	).Scan(&d.ID, &d.URL, &d.Title, &d.Status, &d.OutputPath, &d.CreatedAt, &d.UpdatedAt, &d.MessengerID, &d.UserID, &d.ChatID, &sendFile)
+	).Scan(&d.ID, &d.URL, &d.Title, &d.Status, &d.OutputPath, &d.Size, &d.ErrorMsg, &d.CreatedAt, &d.UpdatedAt, &d.MessengerID, &d.UserID, &d.ChatID, &sendFile)
 	if err != nil {
 		return nil, err
 	}
 	d.SendFile = sendFile == 1
 	return d, nil
+}
+
+func (db *DB) DeleteDownload(id int64) error {
+	_, err := db.conn.Exec(`DELETE FROM downloads WHERE id = ?`, id)
+	return err
+}
+
+func (db *DB) ListDownloads() ([]Download, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, url, title, status, output_path, size, error_msg, created_at, updated_at, messenger_id, user_id, chat_id, send_file 
+		 FROM downloads ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var downloads []Download
+	for rows.Next() {
+		var d Download
+		var sendFile int
+		if err := rows.Scan(&d.ID, &d.URL, &d.Title, &d.Status, &d.OutputPath, &d.Size, &d.ErrorMsg, &d.CreatedAt, &d.UpdatedAt, &d.MessengerID, &d.UserID, &d.ChatID, &sendFile); err != nil {
+			return nil, err
+		}
+		d.SendFile = sendFile == 1
+		downloads = append(downloads, d)
+	}
+
+	return downloads, nil
 }
 
 func (db *DB) CreateTask(t *Task) error {

@@ -17,6 +17,7 @@ type Agent struct {
 	downloader *downloader.Downloader
 	senders    map[string]FileSender
 	mu         sync.RWMutex
+	cancels    map[int64]context.CancelFunc
 }
 
 type Response struct {
@@ -32,6 +33,7 @@ func New(database *db.DB, dl *downloader.Downloader) *Agent {
 		db:         database,
 		downloader: dl,
 		senders:    make(map[string]FileSender),
+		cancels:    make(map[int64]context.CancelFunc),
 	}
 }
 
@@ -108,7 +110,7 @@ func (a *Agent) handleDownload(ctx context.Context, messengerID string, userID i
 		return &Response{Text: fmt.Sprintf("Failed to save download: %v", err)}, nil
 	}
 
-	go a.processDownload(ctx, d)
+	a.ProcessDownload(ctx, d)
 
 	sendInfo := ""
 	if sendFile {
@@ -118,16 +120,42 @@ func (a *Agent) handleDownload(ctx context.Context, messengerID string, userID i
 	return &Response{Text: fmt.Sprintf("Download started: %s\nID: %d%s", title, d.ID, sendInfo)}, nil
 }
 
+func (a *Agent) ProcessDownload(ctx context.Context, d *db.Download) {
+	ctx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
+	a.cancels[d.ID] = cancel
+	a.mu.Unlock()
+	go func() {
+		defer func() {
+			a.mu.Lock()
+			delete(a.cancels, d.ID)
+			a.mu.Unlock()
+		}()
+		a.processDownload(ctx, d)
+	}()
+}
+
+func (a *Agent) CancelDownload(id int64) bool {
+	a.mu.RLock()
+	cancel, ok := a.cancels[id]
+	a.mu.RUnlock()
+	if ok {
+		cancel()
+		return true
+	}
+	return false
+}
+
 func (a *Agent) processDownload(ctx context.Context, d *db.Download) {
 	_ = a.db.UpdateDownloadStatus(d.ID, "downloading")
 
 	result, err := a.downloader.Download(ctx, &downloader.DownloadRequest{URL: d.URL})
 	if err != nil {
-		_ = a.db.UpdateDownloadStatus(d.ID, "failed")
+		_ = a.db.UpdateDownloadError(d.ID, "failed", err.Error())
 		return
 	}
 
-	_ = a.db.UpdateDownloadStatus(d.ID, "completed")
+	_ = a.db.UpdateDownloadResult(d.ID, result.Title, result.OutputPath, "completed", result.Size)
 
 	d.OutputPath = result.OutputPath
 	d.Title = result.Title

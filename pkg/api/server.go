@@ -6,15 +6,19 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
 
+	"github.com/mitry/ytbloader/pkg/agent"
 	"github.com/mitry/ytbloader/pkg/db"
 	"github.com/mitry/ytbloader/pkg/downloader"
 )
 
 type Server struct {
-	server   *http.Server
-	db       *db.DB
+	server     *http.Server
+	db         *db.DB
 	downloader *downloader.Downloader
+	agent      *agent.Agent
 }
 
 type DownloadRequest struct {
@@ -33,10 +37,11 @@ type Response struct {
 	Error   string      `json:"error,omitempty"`
 }
 
-func NewServer(addr string, database *db.DB, dl *downloader.Downloader) *Server {
+func NewServer(addr string, database *db.DB, dl *downloader.Downloader, agt *agent.Agent, webDir string) *Server {
 	s := &Server{
-		db:       database,
+		db:         database,
 		downloader: dl,
+		agent:      agt,
 	}
 
 	mux := http.NewServeMux()
@@ -45,6 +50,10 @@ func NewServer(addr string, database *db.DB, dl *downloader.Downloader) *Server 
 	mux.HandleFunc("/api/downloads/", s.downloadHandler)
 	mux.HandleFunc("/api/tasks", s.tasksHandler)
 	mux.HandleFunc("/api/tasks/", s.taskHandler)
+
+	if webDir != "" {
+		mux.Handle("/", http.FileServer(http.Dir(webDir)))
+	}
 
 	s.server = &http.Server{
 		Addr:    addr,
@@ -85,11 +94,22 @@ func (s *Server) downloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.HasSuffix(id, "/file") {
+		s.serveFile(w, r, id[:len(id)-5])
+		return
+	}
+	if strings.HasSuffix(id, "/cancel") {
+		s.cancelDownload(w, r, id[:len(id)-len("/cancel")])
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		s.getDownload(w, r, id)
 	case http.MethodPut:
-		s.updateDownload(w, r, id)
+		s.retryDownload(w, r, id)
+	case http.MethodDelete:
+		s.deleteDownload(w, r, id)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -124,7 +144,12 @@ func (s *Server) taskHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listDownloads(w http.ResponseWriter, r *http.Request) {
-	s.respond(w, Response{Success: true, Data: []interface{}{}})
+	downloads, err := s.db.ListDownloads()
+	if err != nil {
+		s.respondError(w, "Failed to list downloads", http.StatusInternalServerError)
+		return
+	}
+	s.respond(w, Response{Success: true, Data: downloads})
 }
 
 func (s *Server) createDownload(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +168,8 @@ func (s *Server) createDownload(w http.ResponseWriter, r *http.Request) {
 		s.respondError(w, "Failed to create download", http.StatusInternalServerError)
 		return
 	}
+
+	s.agent.ProcessDownload(context.Background(), d)
 
 	s.respond(w, Response{Success: true, Data: d})
 }
@@ -163,8 +190,86 @@ func (s *Server) getDownload(w http.ResponseWriter, r *http.Request, id string) 
 	s.respond(w, Response{Success: true, Data: d})
 }
 
-func (s *Server) updateDownload(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) retryDownload(w http.ResponseWriter, r *http.Request, id string) {
+	var downloadID int64
+	if _, err := fmt.Sscanf(id, "%d", &downloadID); err != nil {
+		s.respondError(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	d, err := s.db.GetDownload(downloadID)
+	if err != nil {
+		s.respondError(w, "Download not found", http.StatusNotFound)
+		return
+	}
+
+	if d.Status != "pending" && d.Status != "failed" && d.Status != "cancelled" {
+		s.respondError(w, fmt.Sprintf("Cannot retry download in '%s' status", d.Status), http.StatusBadRequest)
+		return
+	}
+
+	_ = s.db.UpdateDownloadStatus(d.ID, "pending")
+	go s.agent.ProcessDownload(context.Background(), d)
+
+	s.respond(w, Response{Success: true, Data: d})
+}
+
+func (s *Server) deleteDownload(w http.ResponseWriter, r *http.Request, id string) {
+	var downloadID int64
+	if _, err := fmt.Sscanf(id, "%d", &downloadID); err != nil {
+		s.respondError(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.db.DeleteDownload(downloadID); err != nil {
+		s.respondError(w, "Failed to delete download", http.StatusInternalServerError)
+		return
+	}
+
 	s.respond(w, Response{Success: true})
+}
+
+func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, id string) {
+	var downloadID int64
+	if _, err := fmt.Sscanf(id, "%d", &downloadID); err != nil {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	d, err := s.db.GetDownload(downloadID)
+	if err != nil {
+		http.Error(w, "Download not found", http.StatusNotFound)
+		return
+	}
+
+	if d.OutputPath == "" {
+		http.Error(w, "File not available", http.StatusNotFound)
+		return
+	}
+
+	name := filepath.Base(d.OutputPath)
+	if len(name) > 200 {
+		name = name[:200] + filepath.Ext(name)
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+	http.ServeFile(w, r, d.OutputPath)
+}
+
+func (s *Server) cancelDownload(w http.ResponseWriter, r *http.Request, id string) {
+	var downloadID int64
+	if _, err := fmt.Sscanf(id, "%d", &downloadID); err != nil {
+		s.respondError(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	cancelled := s.agent.CancelDownload(downloadID)
+	_ = s.db.UpdateDownloadError(downloadID, "cancelled", "")
+
+	msg := "Download cancelled"
+	if !cancelled {
+		msg = "Download was not active"
+	}
+	s.respond(w, Response{Success: true, Data: msg})
 }
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {

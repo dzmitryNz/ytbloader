@@ -1,8 +1,10 @@
 package downloader
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -23,6 +25,7 @@ type DownloadRequest struct {
 type DownloadResult struct {
 	OutputPath string
 	Title      string
+	Size       int64
 }
 
 type ChannelInfo struct {
@@ -56,36 +59,53 @@ func (d *Downloader) Download(ctx context.Context, req *DownloadRequest) (*Downl
 		return nil, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
-	outputTemplate := filepath.Join(outputDir, "%(title)s.%(ext)s")
+	outputTemplate := filepath.Join(outputDir, "%(title).100s.%(ext)s")
 
-	args := []string{
-		"-x", "--audio-format", "mp3",
-		"--audio-quality", "0",
+	dlArgs := []string{
 		"-o", outputTemplate,
-		"--print", "filename",
+		"--print", "after_move:filename",
 		req.URL,
 	}
 
-	cmd := exec.CommandContext(ctx, d.binaryPath, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("failed to download: %w, output: %s", err, string(output))
+	cmd := exec.CommandContext(ctx, d.binaryPath, dlArgs...)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("failed to download: %w", err)
 	}
 
-	outputPath := string(output)
-	if len(outputPath) > 0 && outputPath[len(outputPath)-1] == '\n' {
-		outputPath = outputPath[:len(outputPath)-1]
+	dlPath := strings.TrimSpace(stdout.String())
+	if dlPath == "" {
+		return nil, fmt.Errorf("download completed but output path not reported")
 	}
 
-	title := filepath.Base(outputPath)
-	ext := filepath.Ext(title)
-	if ext != "" {
-		title = title[:len(title)-len(ext)]
+	ext := filepath.Ext(dlPath)
+	mp3Path := strings.TrimSuffix(dlPath, ext) + ".mp3"
+
+	ffArgs := []string{"-i", dlPath, "-codec:a", "libmp3lame", "-q:a", "0", "-y", mp3Path}
+	ffCmd := exec.CommandContext(ctx, "ffmpeg", ffArgs...)
+	ffCmd.Stderr = os.Stderr
+	if err := ffCmd.Run(); err != nil {
+		return &DownloadResult{
+			OutputPath: dlPath,
+			Title:      filepath.Base(strings.TrimSuffix(dlPath, ext)),
+			Size:       fileSize(dlPath),
+		}, nil
+	}
+
+	os.Remove(dlPath)
+
+	title := filepath.Base(mp3Path)
+	titleExt := filepath.Ext(title)
+	if titleExt != "" {
+		title = title[:len(title)-len(titleExt)]
 	}
 
 	return &DownloadResult{
-		OutputPath: outputPath,
+		OutputPath: mp3Path,
 		Title:      title,
+		Size:       fileSize(mp3Path),
 	}, nil
 }
 
@@ -100,21 +120,95 @@ func (d *Downloader) GetInfo(ctx context.Context, url string) (string, error) {
 	}
 
 	cmd := exec.CommandContext(ctx, d.binaryPath, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("failed to get info: %w, output: %s", err, string(output))
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to get info: %w", err)
 	}
 
-	title := string(output)
-	if len(title) > 0 && title[len(title)-1] == '\n' {
-		title = title[:len(title)-1]
-	}
-
-	return title, nil
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 func mkdirAll(path string) error {
-	return exec.Command("mkdir", "-p", path).Run()
+	return os.MkdirAll(path, 0755)
+}
+
+func fileSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+func dirFiles(dir string) map[string]bool {
+	files := make(map[string]bool)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return files
+	}
+	for _, e := range entries {
+		files[e.Name()] = true
+	}
+	return files
+}
+
+func findNewFile(before map[string]bool, dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var newest string
+	var newestTime int64
+	for _, e := range entries {
+		if before[e.Name()] {
+			continue
+		}
+		if e.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(e.Name())
+		if ext != ".mp3" && ext != ".webm" && ext != ".m4a" && ext != ".opus" && ext != ".ogg" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().UnixNano() > newestTime {
+			newestTime = info.ModTime().UnixNano()
+			newest = filepath.Join(dir, e.Name())
+		}
+	}
+	return newest
+}
+
+func findNewestAudio(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var newest string
+	var newestTime int64
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(e.Name())
+		if ext != ".mp3" && ext != ".webm" && ext != ".m4a" && ext != ".opus" && ext != ".ogg" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().UnixNano() > newestTime {
+			newestTime = info.ModTime().UnixNano()
+			newest = filepath.Join(dir, e.Name())
+		}
+	}
+	return newest
 }
 
 func (d *Downloader) GetChannelInfo(ctx context.Context, url string) (*ChannelInfo, error) {
@@ -129,15 +223,14 @@ func (d *Downloader) GetChannelInfo(ctx context.Context, url string) (*ChannelIn
 	}
 
 	cmd := exec.CommandContext(ctx, d.binaryPath, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get channel info: %w, output: %s", err, string(output))
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("failed to get channel info: %w", err)
 	}
 
-	result := string(output)
-	if len(result) > 0 && result[len(result)-1] == '\n' {
-		result = result[:len(result)-1]
-	}
+	result := strings.TrimSpace(stdout.String())
 
 	parts := strings.SplitN(result, "|||", 2)
 	if len(parts) < 2 {
@@ -160,13 +253,15 @@ func (d *Downloader) GetChannelVideos(ctx context.Context, channelURL string, li
 	}
 
 	cmd := exec.CommandContext(ctx, d.binaryPath, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get channel videos: %w, output: %s", err, string(output))
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("failed to get channel videos: %w", err)
 	}
 
 	var videos []VideoInfo
-	lines := strings.Split(string(output), "\n")
+	lines := strings.Split(stdout.String(), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ytbloader</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0e0e0;min-height:100vh}
+.header{background:#1a1a2e;padding:16px 24px;border-bottom:1px solid #333;display:flex;align-items:center;gap:12px}
+.header h1{font-size:20px;color:#fff}
+.container{max-width:900px;margin:0 auto;padding:24px}
+.add-form{background:#1a1a2e;border-radius:8px;padding:20px;margin-bottom:24px;border:1px solid #333}
+.add-form h2{font-size:16px;margin-bottom:12px;color:#aaa}
+.input-row{display:flex;gap:8px}
+.input-row input{flex:1;padding:10px 14px;background:#0f0f0f;border:1px solid #444;border-radius:6px;color:#fff;font-size:14px;outline:none}
+.input-row input:focus{border-color:#667eea}
+.input-row button{padding:10px 20px;background:#667eea;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600}
+.input-row button:hover{background:#5a6fd6}
+.input-row button:disabled{opacity:.5;cursor:not-allowed}
+.downloads{display:flex;flex-direction:column;gap:8px}
+.download-item{background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:14px 16px;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+.download-title{font-size:14px;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.download-url{font-size:12px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.download-error{font-size:12px;color:#ff6666;margin-top:4px;word-break:break-all;max-height:60px;overflow:hidden}
+.download-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.status{font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;text-transform:uppercase}
+.status-pending{background:#332200;color:#ffaa00}
+.status-downloading{background:#002233;color:#00aaff}
+.status-completed{background:#003300;color:#00cc44}
+.status-failed{background:#330000;color:#ff4444}
+.status-cancelled{background:#222200;color:#aaaa00}
+.size{font-size:12px;color:#666}
+.actions{display:flex;gap:6px;grid-column:1/-1;justify-content:flex-end}
+.actions a,.actions button{padding:6px 12px;border:1px solid #444;border-radius:4px;font-size:12px;text-decoration:none;cursor:pointer;background:#2a2a3e;color:#aaa}
+.actions a:hover,.actions button:hover{background:#3a3a4e;color:#fff}
+.btn-cancel{border-color:#aa6600;color:#ffaa00}
+.btn-cancel:hover{background:#443300}
+.btn-restart{border-color:#0066aa;color:#00aaff}
+.btn-restart:hover{background:#002244}
+.btn-delete{border-color:#662222;color:#ff6666}
+.btn-delete:hover{background:#441111}
+.empty{text-align:center;color:#555;padding:40px;font-size:14px}
+.polling{animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>ytbloader</h1>
+</div>
+<div class="container">
+<div class="add-form">
+<h2>Add download</h2>
+<div class="input-row">
+<input type="text" id="url" placeholder="https://www.youtube.com/watch?v=...">
+<button id="btn" onclick="addDownload()">Download</button>
+</div>
+</div>
+<div id="list" class="downloads"></div>
+</div>
+<script>
+const API = '/api';
+let timer;
+
+async function addDownload() {
+  const input = document.getElementById('url');
+  const btn = document.getElementById('btn');
+  const url = input.value.trim();
+  if (!url) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${API}/downloads`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({url})
+    });
+    const data = await res.json();
+    if (data.success) {
+      input.value = '';
+      load();
+    } else {
+      alert(data.error || 'Failed');
+    }
+  } catch(e) { alert('Error: ' + e.message); }
+  btn.disabled = false;
+}
+
+async function load() {
+  try {
+    const res = await fetch(`${API}/downloads`);
+    const data = await res.json();
+    if (!data.success) return;
+    render(data.data || []);
+    const active = (data.data||[]).some(d => d.Status === 'pending' || d.Status === 'downloading');
+    if (active && !timer) timer = setInterval(load, 3000);
+    if (!active && timer) { clearInterval(timer); timer = null; }
+  } catch(e) {}
+}
+
+function render(items) {
+  const el = document.getElementById('list');
+  if (!items.length) { el.innerHTML = '<div class="empty">No downloads yet</div>'; return; }
+  el.innerHTML = items.map(d => {
+    const size = d.Size > 0 ? formatSize(d.Size) : '';
+    const isActive = d.Status === 'pending' || d.Status === 'downloading';
+    const title = d.Title || d.URL;
+    let actions = '';
+    if (d.Status === 'completed' && d.OutputPath) {
+      actions += `<a href="${API}/downloads/${d.ID}/file">Save</a>`;
+    }
+    if (isActive) {
+      actions += `<button class="btn-cancel" onclick="cancelDownload(${d.ID})">Cancel</button>`;
+    }
+    if (d.Status === 'failed' || d.Status === 'cancelled') {
+      actions += `<button class="btn-restart" onclick="restartDownload(${d.ID})">Restart</button>`;
+    }
+    actions += `<button class="btn-delete" onclick="deleteDownload(${d.ID})">Delete</button>`;
+    return `<div class="download-item ${isActive?'polling':''}">
+      <div>
+        <div class="download-title">${esc(title)}</div>
+        <div class="download-url">${esc(d.URL)}</div>
+        ${d.ErrorMsg ? `<div class="download-error">${esc(d.ErrorMsg)}</div>` : ''}
+      </div>
+      <div class="download-meta">
+        <span class="status status-${d.Status}">${d.Status}</span>
+        ${size ? `<span class="size">${size}</span>` : ''}
+      </div>
+      <div class="actions">${actions}</div>
+    </div>`;
+  }).join('');
+}
+
+async function cancelDownload(id) {
+  await fetch(`${API}/downloads/${id}/cancel`, {method:'PUT'});
+  load();
+}
+
+async function restartDownload(id) {
+  await fetch(`${API}/downloads/${id}`, {method:'PUT'});
+  load();
+}
+
+async function deleteDownload(id) {
+  if (!confirm('Delete this download?')) return;
+  await fetch(`${API}/downloads/${id}`, {method:'DELETE'});
+  load();
+}
+
+function formatSize(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+document.getElementById('url').addEventListener('keydown', e => {
+  if (e.key === 'Enter') addDownload();
+});
+
+load();
+</script>
+</body>
+</html>

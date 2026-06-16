@@ -63,7 +63,7 @@ func main() {
 		}
 	}
 
-	apiServer := api.NewServer(":"+cfg.Server.Port, database, dl)
+	apiServer := api.NewServer(":"+cfg.Server.Port, database, dl, agt, cfg.WebDir)
 	go func() {
 		if err := apiServer.Start(); err != nil {
 			log.Printf("API server error: %v", err)

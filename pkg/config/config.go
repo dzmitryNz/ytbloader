@@ -12,6 +12,7 @@ type Config struct {
 	Discord  DiscordConfig
 	Matter   MatterConfig
 	YTDL     YTDLConfig
+	WebDir   string
 }
 
 type ServerConfig struct {
@@ -43,7 +44,7 @@ type YTDLConfig struct {
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Port: getEnv("SERVER_PORT", "8080"),
+			Port: getEnv("SERVER_PORT", "8070"),
 		},
 		Database: DatabaseConfig{
 			Path: getEnv("DB_PATH", "ytbloader.db"),
@@ -62,6 +63,7 @@ func Load() *Config {
 			BinaryPath: getEnv("YTDLP_PATH", "yt-dlp"),
 			OutputDir:  getEnv("YTDLP_OUTPUT_DIR", "./downloads"),
 		},
+		WebDir: getEnv("WEB_DIR", "web"),
 	}
 }
 
