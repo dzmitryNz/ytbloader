@@ -91,7 +91,7 @@ func (a *Agent) handleDownload(ctx context.Context, messengerID string, userID i
 		}
 	}
 
-	title, err := a.downloader.GetInfo(ctx, url)
+	title, channelName, err := a.downloader.GetInfo(ctx, url)
 	if err != nil {
 		return &Response{Text: fmt.Sprintf("Failed to get video info: %v", err)}, nil
 	}
@@ -99,6 +99,7 @@ func (a *Agent) handleDownload(ctx context.Context, messengerID string, userID i
 	d := &db.Download{
 		URL:         url,
 		Title:       title,
+		ChannelName: channelName,
 		Status:      "pending",
 		MessengerID: messengerID,
 		UserID:      userID,
@@ -149,7 +150,12 @@ func (a *Agent) CancelDownload(id int64) bool {
 func (a *Agent) processDownload(ctx context.Context, d *db.Download) {
 	_ = a.db.UpdateDownloadStatus(d.ID, "downloading")
 
-	result, err := a.downloader.Download(ctx, &downloader.DownloadRequest{URL: d.URL})
+	result, err := a.downloader.Download(ctx, &downloader.DownloadRequest{
+		URL: d.URL,
+		OnProgress: func(pct int) {
+			_ = a.db.UpdateDownloadProgress(d.ID, pct)
+		},
+	})
 	if err != nil {
 		_ = a.db.UpdateDownloadError(d.ID, "failed", err.Error())
 		return

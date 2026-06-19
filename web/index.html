@@ -10,6 +10,12 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 .header{background:#1a1a2e;padding:16px 24px;border-bottom:1px solid #333;display:flex;align-items:center;gap:12px}
 .header h1{font-size:20px;color:#fff}
 .container{max-width:900px;margin:0 auto;padding:24px}
+.tabs{display:flex;gap:4px;margin-bottom:24px;border-bottom:1px solid #333;padding-bottom:0}
+.tab{padding:10px 20px;border:none;background:transparent;color:#888;font-size:14px;cursor:pointer;border-bottom:2px solid transparent;transition:all .2s}
+.tab:hover{color:#ccc}
+.tab.active{color:#667eea;border-bottom-color:#667eea}
+.page{display:none}
+.page.active{display:block}
 .add-form{background:#1a1a2e;border-radius:8px;padding:20px;margin-bottom:24px;border:1px solid #333}
 .add-form h2{font-size:16px;margin-bottom:12px;color:#aaa}
 .input-row{display:flex;gap:8px}
@@ -19,8 +25,9 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 .input-row button:hover{background:#5a6fd6}
 .input-row button:disabled{opacity:.5;cursor:not-allowed}
 .downloads{display:flex;flex-direction:column;gap:8px}
-.download-item{background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:14px 16px;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
-.download-title{font-size:14px;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.download-item{background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:14px 16px;display:grid;grid-template-columns:1fr auto;grid-template-rows:auto auto;gap:8px 12px;align-items:start}
+.download-title{font-size:14px;color:#fff;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-wrap:break-word}
+.download-channel{font-size:12px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
 .download-url{font-size:12px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .download-error{font-size:12px;color:#ff6666;margin-top:4px;word-break:break-all;max-height:60px;overflow:hidden}
 .download-meta{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
@@ -42,7 +49,38 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 .btn-delete:hover{background:#441111}
 .empty{text-align:center;color:#555;padding:40px;font-size:14px}
 .polling{animation:pulse 2s infinite}
+.progress-bar{width:100%;height:4px;background:#333;border-radius:2px;margin-top:8px;overflow:hidden}
+.progress-fill{height:100%;background:#667eea;border-radius:2px;transition:width .3s}
+.progress-text{font-size:11px;color:#667eea;margin-top:2px}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.channel-item{background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:14px 16px;margin-bottom:8px}
+.channel-header{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.channel-name{font-size:14px;color:#fff;font-weight:600}
+.channel-url{font-size:12px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:4px}
+.channel-meta{font-size:11px;color:#555;margin-top:6px}
+.channel-actions{display:flex;gap:6px;flex-shrink:0}
+.channel-actions a,.channel-actions button{padding:6px 12px;border:1px solid #444;border-radius:4px;font-size:12px;text-decoration:none;cursor:pointer;background:#2a2a3e;color:#aaa}
+.channel-actions a:hover,.channel-actions button:hover{background:#3a3a4e;color:#fff}
+.channel-status{font-size:12px;color:#667eea;white-space:nowrap;flex-shrink:0}
+.channel-videos{margin-top:12px;border-top:1px solid #333;padding-top:12px;display:none}
+.channel-videos.open{display:block}
+.video-item{display:flex;justify-content:space-between;align-items:flex-start;padding:8px 0;border-bottom:1px solid #222;gap:12px;position:relative}
+.video-item:last-child{border-bottom:none}
+.video-title{font-size:13px;color:#ccc;flex:1;min-width:0;word-wrap:break-word;overflow-wrap:break-word;line-height:1.3}
+.video-item.downloaded .video-title{color:#888}
+.video-downloaded{color:#00cc44;font-size:12px;margin-left:4px}
+.video-date{font-size:11px;color:#666;flex-shrink:0;white-space:nowrap}
+.video-duration{font-size:12px;color:#555;flex-shrink:0}
+.video-dl{padding:4px 10px;border:1px solid #444;border-radius:4px;font-size:11px;text-decoration:none;cursor:pointer;background:#2a2a3e;color:#aaa;flex-shrink:0}
+.video-dl:hover{background:#3a3a4e;color:#fff}
+.video-dl.marked{background:#003300;color:#00cc44;border-color:#00cc44}
+.video-dl.marked:hover{background:#004400}
+.video-thumb-wrap{display:none;position:absolute;right:100%;top:0;margin-right:8px;z-index:10}
+.video-item:hover .video-thumb-wrap{display:block}
+.video-thumb{width:320px;border-radius:6px;display:block;box-shadow:0 4px 12px rgba(0,0,0,0.6)}
+.new-badge{background:#667eea;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px;font-weight:600}
+.btn-unsub{border-color:#662222;color:#ff6666}
+.btn-unsub:hover{background:#441111}
 @media(max-width:600px){
 .header{padding:12px 16px}
 .header h1{font-size:18px}
@@ -54,6 +92,11 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 .download-meta{flex-direction:row;align-items:center;justify-content:space-between}
 .actions{flex-wrap:wrap;justify-content:flex-end}
 .actions a,.actions button{flex-shrink:0}
+.channel-header{flex-direction:column;align-items:flex-start}
+.channel-actions{width:100%}
+.channel-actions button{flex:1}
+.video-item{flex-wrap:wrap}
+.video-thumb-wrap{display:none!important}
 }
 </style>
 </head>
@@ -62,6 +105,12 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 <h1>ytbloader</h1>
 </div>
 <div class="container">
+<div class="tabs">
+<button class="tab active" onclick="switchTab('downloads',this)">Downloads</button>
+<button class="tab" onclick="switchTab('subscriptions',this)">Subscriptions</button>
+</div>
+
+<div id="page-downloads" class="page active">
 <div class="add-form">
 <h2>Add download</h2>
 <div class="input-row">
@@ -71,9 +120,35 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 </div>
 <div id="list" class="downloads"></div>
 </div>
+
+<div id="page-subscriptions" class="page">
+<div class="add-form">
+<h2>Add subscription</h2>
+<div class="input-row">
+<input type="text" id="sub-url" placeholder="https://www.youtube.com/@channel">
+<button id="sub-btn" onclick="addSubscription()">Subscribe</button>
+</div>
+</div>
+<div id="sub-list" class="downloads"></div>
+</div>
+</div>
 <script>
 const API = '/api';
 let timer;
+let activeTab = 'downloads';
+let videoUrls = {};
+
+function switchTab(tab, btn) {
+  activeTab = tab;
+  var tabs = document.querySelectorAll('.tab');
+  tabs.forEach(function(t) { t.classList.remove('active'); });
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+  else tabs[tab === 'downloads' ? 0 : 1].classList.add('active');
+  document.getElementById('page-' + tab).classList.add('active');
+  if (tab === 'downloads') load();
+  if (tab === 'subscriptions') loadSubs();
+}
 
 async function addDownload() {
   const input = document.getElementById('url');
@@ -82,25 +157,21 @@ async function addDownload() {
   if (!url) return;
   btn.disabled = true;
   try {
-    const res = await fetch(`${API}/downloads`, {
+    const res = await fetch(API + '/downloads', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({url})
     });
     const data = await res.json();
-    if (data.success) {
-      input.value = '';
-      load();
-    } else {
-      alert(data.error || 'Failed');
-    }
+    if (data.success) { input.value = ''; load(); }
+    else alert(data.error || 'Failed');
   } catch(e) { alert('Error: ' + e.message); }
   btn.disabled = false;
 }
 
 async function load() {
   try {
-    const res = await fetch(`${API}/downloads`);
+    const res = await fetch(API + '/downloads');
     const data = await res.json();
     if (!data.success) return;
     render(data.data || []);
@@ -118,45 +189,188 @@ function render(items) {
     const isActive = d.Status === 'pending' || d.Status === 'downloading';
     const title = d.Title || d.URL;
     let actions = '';
-    if (d.Status === 'completed' && d.OutputPath) {
-      actions += `<a href="${API}/downloads/${d.ID}/file">Save</a>`;
+    if (d.Status === 'completed' && d.OutputPath) actions += '<a href="' + API + '/downloads/' + d.ID + '/file">Save</a>';
+    if (isActive) actions += '<button class="btn-cancel" onclick="cancelDownload(' + d.ID + ')">Cancel</button>';
+    if (d.Status === 'failed' || d.Status === 'cancelled') actions += '<button class="btn-restart" onclick="restartDownload(' + d.ID + ')">Restart</button>';
+    actions += '<button class="btn-delete" onclick="deleteDownload(' + d.ID + ')">Delete</button>';
+    let progress = '';
+    if (isActive && d.Progress > 0) {
+      progress = '<div class="progress-bar"><div class="progress-fill" style="width:' + d.Progress + '%"></div></div>' +
+        '<div class="progress-text">' + d.Progress + '%</div>';
     }
-    if (isActive) {
-      actions += `<button class="btn-cancel" onclick="cancelDownload(${d.ID})">Cancel</button>`;
-    }
-    if (d.Status === 'failed' || d.Status === 'cancelled') {
-      actions += `<button class="btn-restart" onclick="restartDownload(${d.ID})">Restart</button>`;
-    }
-    actions += `<button class="btn-delete" onclick="deleteDownload(${d.ID})">Delete</button>`;
-    return `<div class="download-item ${isActive?'polling':''}">
-      <div>
-        <div class="download-title">${esc(title)}</div>
-        <div class="download-url">${esc(d.URL)}</div>
-        ${d.ErrorMsg ? `<div class="download-error">${esc(d.ErrorMsg)}</div>` : ''}
-      </div>
-      <div class="download-meta">
-        <span class="status status-${d.Status}">${d.Status}</span>
-        ${size ? `<span class="size">${size}</span>` : ''}
-      </div>
-      <div class="actions">${actions}</div>
-    </div>`;
+    return '<div class="download-item ' + (isActive?'polling':'') + '">' +
+      '<div><div class="download-title">' + esc(title) + '</div>' +
+      (d.ChannelName ? '<div class="download-channel">' + esc(d.ChannelName) + '</div>' : '') +
+      '<div class="download-url">' + esc(d.URL) + '</div>' +
+      (d.ErrorMsg ? '<div class="download-error">' + esc(d.ErrorMsg) + '</div>' : '') +
+      progress +
+      '</div><div class="download-meta">' +
+      '<span class="status status-' + d.Status + '">' + d.Status + '</span>' +
+      (size ? '<span class="size">' + size + '</span>' : '') +
+      '</div><div class="actions">' + actions + '</div></div>';
   }).join('');
 }
 
 async function cancelDownload(id) {
-  await fetch(`${API}/downloads/${id}/cancel`, {method:'PUT'});
+  await fetch(API + '/downloads/' + id + '/cancel', {method:'PUT'});
   load();
 }
-
 async function restartDownload(id) {
-  await fetch(`${API}/downloads/${id}`, {method:'PUT'});
+  await fetch(API + '/downloads/' + id, {method:'PUT'});
   load();
 }
-
 async function deleteDownload(id) {
   if (!confirm('Delete this download?')) return;
-  await fetch(`${API}/downloads/${id}`, {method:'DELETE'});
+  await fetch(API + '/downloads/' + id, {method:'DELETE'});
   load();
+}
+
+async function addSubscription() {
+  const input = document.getElementById('sub-url');
+  const btn = document.getElementById('sub-btn');
+  const url = input.value.trim();
+  if (!url) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch(API + '/subscriptions', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({url})
+    });
+    const data = await res.json();
+    if (data.success) { input.value = ''; loadSubs(); }
+    else alert(data.error || 'Failed');
+  } catch(e) { alert('Error: ' + e.message); }
+  btn.disabled = false;
+}
+
+async function loadSubs() {
+  const el = document.getElementById('sub-list');
+  try {
+    const res = await fetch(API + '/subscriptions');
+    const data = await res.json();
+    if (!data.success) return;
+    const channels = data.data || [];
+    if (!channels.length) { el.innerHTML = '<div class="empty">No subscriptions yet</div>'; return; }
+    el.innerHTML = channels.map(c => {
+      const lastCheck = c.LastCheck ? new Date(c.LastCheck).toLocaleString() : 'never';
+      const newBadge = c.NewVideosCount > 0 ? '<span class="new-badge">' + c.NewVideosCount + ' new</span>' : '';
+      return '<div class="channel-item" id="ch-' + c.ID + '">' +
+        '<div class="channel-header"><div>' +
+        '<div class="channel-name">' + esc(chName(c)) + newBadge + '</div>' +
+        '<div class="channel-url">' + esc(c.URL) + '</div>' +
+        '<div class="channel-meta">Last checked: ' + lastCheck + '</div>' +
+        '</div><div class="channel-actions">' +
+        '<span class="channel-status" id="status-' + c.ID + '"></span>' +
+        '<button class="btn-refresh" onclick="refreshChannel(' + c.ID + ')">Refresh</button>' +
+        '<button class="btn-toggle" onclick="toggleVideos(' + c.ID + ')">Videos</button>' +
+        '<button class="btn-unsub" onclick="deleteSubscription(' + c.ID + ')">Unsubscribe</button>' +
+        '</div></div>' +
+        '<div class="channel-videos" id="vids-' + c.ID + '"></div></div>';
+    }).join('');
+  } catch(e) { el.innerHTML = '<div class="empty">Failed to load subscriptions</div>'; }
+}
+
+async function refreshChannel(id) {
+  var statusEl = document.getElementById('status-' + id);
+  if (statusEl) statusEl.textContent = 'Refreshing...';
+  try {
+    const res = await fetch(API + '/subscriptions/' + id + '/refresh', {method:'POST'});
+    const data = await res.json();
+    if (statusEl) statusEl.textContent = '';
+    if (data.success) {
+      var videos = data.data.videos || [];
+      var newCount = data.data.newCount || 0;
+      renderVideos(id, videos);
+      loadSubs();
+      if (newCount > 0) {
+        var el = document.getElementById('ch-' + id);
+        if (el) {
+          var nameEl = el.querySelector('.channel-name');
+          if (nameEl && !nameEl.querySelector('.new-badge')) {
+            nameEl.innerHTML += '<span class="new-badge">' + newCount + ' new</span>';
+          }
+        }
+      }
+    }
+  } catch(e) { if (statusEl) statusEl.textContent = ''; }
+}
+
+async function toggleVideos(id) {
+  const el = document.getElementById('vids-' + id);
+  if (!el) return;
+  if (el.classList.contains('open')) { el.classList.remove('open'); return; }
+  el.classList.add('open');
+  try {
+    const res = await fetch(API + '/channels/' + id);
+    const data = await res.json();
+    if (data.success) renderVideos(id, data.data || []);
+    else el.innerHTML = '<div class="empty">No videos yet. Click Refresh to fetch.</div>';
+  } catch(e) { el.innerHTML = '<div class="empty">Failed to load videos</div>'; }
+}
+
+function renderVideos(channelId, videos) {
+  const el = document.getElementById('vids-' + channelId);
+  if (!el) return;
+  if (!videos.length) { el.innerHTML = '<div class="empty">No videos found. Click Refresh to check for new ones.</div>'; return; }
+  videos.forEach(function(v, i) {
+    videoUrls[channelId + '_' + i] = v.URL;
+  });
+  el.innerHTML = videos.map(function(v, i) {
+    var dur = v.Duration > 0 ? formatDuration(v.Duration) : '';
+    var date = v.Published && v.Published !== '0001-01-01T00:00:00Z' ? formatDate(v.Published) : '';
+    var thumb = thumbUrl(v.URL);
+    var downloaded = v.IsDownloaded ? '<span class="video-downloaded">&#10003;</span>' : '';
+    var cls = v.IsDownloaded ? ' downloaded' : '';
+    var markClass = v.IsDownloaded ? ' video-dl marked' : 'video-dl';
+    var markLabel = v.IsDownloaded ? '&#10003;' : '&#10007;';
+    var markTitle = v.IsDownloaded ? 'Unmark' : 'Mark downloaded';
+    return '<div class="video-item' + cls + '">' +
+      (thumb ? '<div class="video-thumb-wrap"><img class="video-thumb" src="' + esc(thumb) + '" loading="lazy"></div>' : '') +
+      '<span class="video-title">' + esc(v.Title || v.URL) + downloaded + '</span>' +
+      (date ? '<span class="video-date">' + date + '</span>' : '') +
+      (dur ? '<span class="video-duration">' + dur + '</span>' : '') +
+      '<a class="' + markClass + '" href="#" title="' + markTitle + '" onclick="toggleVideoDownloaded(event,\'' + esc(v.URL) + '\',' + channelId + ')">' + markLabel + '</a>' +
+      '<a class="video-dl" href="#" onclick="quickDownload(event,' + channelId + ',' + i + ')">DL</a>' +
+      '</div>';
+  }).join('');
+}
+
+function quickDownload(e, channelId, idx) {
+  e.preventDefault();
+  var url = videoUrls[channelId + '_' + idx];
+  document.getElementById('url').value = url;
+  switchTab('downloads', null);
+  setTimeout(addDownload, 100);
+}
+
+async function toggleVideoDownloaded(e, url, channelId) {
+  e.preventDefault();
+  var isMarked = e.target.classList.contains('marked');
+  try {
+    if (isMarked) {
+      await fetch(API + '/video-downloads', {
+        method: 'DELETE',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({url: url})
+      });
+    } else {
+      await fetch(API + '/video-downloads', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({url: url})
+      });
+    }
+    var res = await fetch(API + '/channels/' + channelId);
+    var data = await res.json();
+    if (data.success) renderVideos(channelId, data.data || []);
+  } catch(err) {}
+}
+
+async function deleteSubscription(id) {
+  if (!confirm('Unsubscribe from this channel?')) return;
+  await fetch(API + '/subscriptions/' + id, {method:'DELETE'});
+  loadSubs();
 }
 
 function formatSize(b) {
@@ -165,14 +379,57 @@ function formatSize(b) {
   return (b/1048576).toFixed(1) + ' MB';
 }
 
+function formatDuration(s) {
+  var h = Math.floor(s/3600);
+  var m = Math.floor((s%3600)/60);
+  var sec = s%60;
+  if (h > 0) return h + ':' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+  return m + ':' + String(sec).padStart(2,'0');
+}
+
+function formatDate(s) {
+  var d = new Date(s);
+  return d.toLocaleDateString('ru-RU', {day:'2-digit', month:'2-digit', year:'2-digit'});
+}
+
+function chName(c) {
+  if (c.Name && c.Name !== 'Unknown') return c.Name;
+  try {
+    var u = new URL(c.URL);
+    var parts = u.pathname.split('/').filter(Boolean);
+    for (var i = parts.length - 1; i >= 0; i--) {
+      if (parts[i].startsWith('@')) return parts[i];
+    }
+  } catch(e) {}
+  return c.Name || 'Unknown';
+}
+
+function videoId(url) {
+  try {
+    var u = new URL(url);
+    if (u.hostname === 'youtu.be') return u.pathname.slice(1);
+    if (u.searchParams.has('v')) return u.searchParams.get('v');
+    var parts = u.pathname.split('/');
+    return parts[parts.length - 1];
+  } catch(e) { return ''; }
+}
+
+function thumbUrl(url) {
+  var id = videoId(url);
+  return id ? 'https://img.youtube.com/vi/' + id + '/hqdefault.jpg' : '';
+}
+
 function esc(s) {
-  const d = document.createElement('div');
+  var d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
 }
 
-document.getElementById('url').addEventListener('keydown', e => {
+document.getElementById('url').addEventListener('keydown', function(e) {
   if (e.key === 'Enter') addDownload();
+});
+document.getElementById('sub-url').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') addSubscription();
 });
 
 load();

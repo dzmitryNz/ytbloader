@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -50,6 +51,10 @@ func NewServer(addr string, database *db.DB, dl *downloader.Downloader, agt *age
 	mux.HandleFunc("/api/downloads/", s.downloadHandler)
 	mux.HandleFunc("/api/tasks", s.tasksHandler)
 	mux.HandleFunc("/api/tasks/", s.taskHandler)
+	mux.HandleFunc("/api/subscriptions", s.subscriptionsHandler)
+	mux.HandleFunc("/api/subscriptions/", s.subscriptionHandler)
+	mux.HandleFunc("/api/channels/", s.channelVideosHandler)
+	mux.HandleFunc("/api/video-downloads", s.videoDownloadsHandler)
 
 	if webDir != "" {
 		mux.Handle("/", http.FileServer(http.Dir(webDir)))
@@ -159,9 +164,13 @@ func (s *Server) createDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	title, channelName, _ := s.downloader.GetInfo(r.Context(), req.URL)
+
 	d := &db.Download{
-		URL:    req.URL,
-		Status: "pending",
+		URL:         req.URL,
+		Title:       title,
+		ChannelName: channelName,
+		Status:      "pending",
 	}
 
 	if err := s.db.CreateDownload(d); err != nil {
@@ -247,6 +256,11 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 
+	if _, err := os.Stat(d.OutputPath); os.IsNotExist(err) {
+		s.respondError(w, "File not found on disk", http.StatusNotFound)
+		return
+	}
+
 	name := filepath.Base(d.OutputPath)
 	if len(name) > 200 {
 		name = name[:200] + filepath.Ext(name)
@@ -270,6 +284,188 @@ func (s *Server) cancelDownload(w http.ResponseWriter, r *http.Request, id strin
 		msg = "Download was not active"
 	}
 	s.respond(w, Response{Success: true, Data: msg})
+}
+
+func (s *Server) subscriptionsHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.listSubscriptions(w, r)
+	case http.MethodPost:
+		s.createSubscription(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) subscriptionHandler(w http.ResponseWriter, r *http.Request) {
+	id := extractID(r.URL.Path, "/api/subscriptions/")
+	if id == "" {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	if strings.HasSuffix(id, "/refresh") {
+		s.refreshSubscription(w, r, id[:len(id)-len("/refresh")])
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		s.deleteSubscription(w, r, id)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) channelVideosHandler(w http.ResponseWriter, r *http.Request) {
+	id := extractID(r.URL.Path, "/api/channels/")
+	if id == "" {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var channelID int64
+	if _, err := fmt.Sscanf(id, "%d", &channelID); err != nil {
+		s.respondError(w, "Invalid channel ID", http.StatusBadRequest)
+		return
+	}
+
+	_ = s.db.ResetChannelNewVideosCount(channelID)
+
+	limit := 50
+	videos, err := s.db.GetVideosByChannel(channelID, limit)
+	if err != nil {
+		s.respondError(w, "Failed to list videos", http.StatusInternalServerError)
+		return
+	}
+
+	downloadedURLs, _ := s.db.GetDownloadedVideoURLs()
+
+	type VideoResponse struct {
+		db.Video
+		IsDownloaded bool `json:"IsDownloaded"`
+	}
+
+	var response []VideoResponse
+	for _, v := range videos {
+		response = append(response, VideoResponse{
+			Video:        v,
+			IsDownloaded: downloadedURLs[v.URL],
+		})
+	}
+
+	s.respond(w, Response{Success: true, Data: response})
+}
+
+func (s *Server) listSubscriptions(w http.ResponseWriter, r *http.Request) {
+	channels, err := s.db.ListAllChannels()
+	if err != nil {
+		s.respondError(w, "Failed to list subscriptions", http.StatusInternalServerError)
+		return
+	}
+	s.respond(w, Response{Success: true, Data: channels})
+}
+
+func (s *Server) createSubscription(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.URL == "" {
+		s.respondError(w, "URL is required", http.StatusBadRequest)
+		return
+	}
+
+	existing, _ := s.db.GetChannelByURL(req.URL, "", 0)
+	if existing != nil {
+		s.respondError(w, "Already subscribed", http.StatusConflict)
+		return
+	}
+
+	info, err := s.downloader.GetChannelInfo(r.Context(), req.URL)
+	if err != nil {
+		s.respondError(w, fmt.Sprintf("Failed to get channel info: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	channel := &db.Channel{
+		URL:  req.URL,
+		Name: info.Name,
+	}
+
+	if err := s.db.CreateChannel(channel); err != nil {
+		s.respondError(w, "Failed to create subscription", http.StatusInternalServerError)
+		return
+	}
+
+	s.respond(w, Response{Success: true, Data: channel})
+}
+
+func (s *Server) deleteSubscription(w http.ResponseWriter, r *http.Request, id string) {
+	var channelID int64
+	if _, err := fmt.Sscanf(id, "%d", &channelID); err != nil {
+		s.respondError(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.db.DeleteChannel(channelID); err != nil {
+		s.respondError(w, "Failed to delete subscription", http.StatusInternalServerError)
+		return
+	}
+
+	s.respond(w, Response{Success: true})
+}
+
+func (s *Server) refreshSubscription(w http.ResponseWriter, r *http.Request, id string) {
+	var channelID int64
+	if _, err := fmt.Sscanf(id, "%d", &channelID); err != nil {
+		s.respondError(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	channel, err := s.db.GetChannel(channelID)
+	if err != nil {
+		s.respondError(w, "Channel not found", http.StatusNotFound)
+		return
+	}
+
+	oldLastCheck := channel.LastCheck
+
+	videos, err := s.downloader.GetChannelVideos(r.Context(), channel.URL, 30)
+	if err != nil {
+		s.respondError(w, fmt.Sprintf("Failed to fetch videos: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	for _, v := range videos {
+		s.db.UpsertVideo(&db.Video{
+			ChannelID: channelID,
+			URL:       v.URL,
+			Title:     v.Title,
+			Duration:  v.Duration,
+			Published: v.Published,
+		})
+	}
+
+	_ = s.db.UpdateChannelLastCheck(channelID)
+
+	newCount, _ := s.db.CountNewVideosSince(channelID, oldLastCheck)
+	_ = s.db.UpdateChannelNewVideosCount(channelID, newCount)
+
+	dbVideos, _ := s.db.GetVideosByChannel(channelID, 50)
+	s.respond(w, Response{Success: true, Data: map[string]interface{}{
+		"videos":   dbVideos,
+		"newCount": newCount,
+	}})
 }
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
@@ -314,6 +510,39 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request, id string) {
 
 func (s *Server) updateTask(w http.ResponseWriter, r *http.Request, id string) {
 	s.respond(w, Response{Success: true})
+}
+
+func (s *Server) videoDownloadsHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		var req struct {
+			URL string `json:"url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
+			s.respondError(w, "URL is required", http.StatusBadRequest)
+			return
+		}
+		if err := s.db.MarkVideoDownloaded(req.URL); err != nil {
+			s.respondError(w, "Failed to mark video", http.StatusInternalServerError)
+			return
+		}
+		s.respond(w, Response{Success: true})
+	case http.MethodDelete:
+		var req struct {
+			URL string `json:"url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
+			s.respondError(w, "URL is required", http.StatusBadRequest)
+			return
+		}
+		if err := s.db.UnmarkVideoDownloaded(req.URL); err != nil {
+			s.respondError(w, "Failed to unmark video", http.StatusInternalServerError)
+			return
+		}
+		s.respond(w, Response{Success: true})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) respond(w http.ResponseWriter, resp Response) {

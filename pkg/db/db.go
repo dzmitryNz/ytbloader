@@ -16,10 +16,12 @@ type Download struct {
 	ID          int64
 	URL         string
 	Title       string
+	ChannelName string
 	Status      string
 	OutputPath  string
 	Size        int64
 	ErrorMsg    string
+	Progress    int
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	MessengerID string
@@ -41,14 +43,15 @@ type Task struct {
 }
 
 type Channel struct {
-	ID          int64
-	URL         string
-	Name        string
-	MessengerID string
-	UserID      int64
-	ChatID      int64
-	LastCheck   time.Time
-	CreatedAt   time.Time
+	ID             int64
+	URL            string
+	Name           string
+	MessengerID    string
+	UserID         int64
+	ChatID         int64
+	LastCheck      time.Time
+	NewVideosCount int
+	CreatedAt      time.Time
 }
 
 type Video struct {
@@ -137,6 +140,18 @@ func (db *DB) migrate() error {
 
 	db.conn.Exec(`ALTER TABLE downloads ADD COLUMN size INTEGER DEFAULT 0`)
 	db.conn.Exec(`ALTER TABLE downloads ADD COLUMN error_msg TEXT DEFAULT ''`)
+	db.conn.Exec(`ALTER TABLE downloads ADD COLUMN progress INTEGER DEFAULT 0`)
+	db.conn.Exec(`ALTER TABLE downloads ADD COLUMN channel_name TEXT DEFAULT ''`)
+	db.conn.Exec(`ALTER TABLE channels ADD COLUMN new_videos_count INTEGER DEFAULT 0`)
+
+	db.conn.Exec(`CREATE TABLE IF NOT EXISTS video_downloads (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		url TEXT NOT NULL UNIQUE,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+
+	db.conn.Exec(`DELETE FROM videos WHERE id NOT IN (SELECT MIN(id) FROM videos GROUP BY channel_id, url)`)
+	db.conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_channel_url ON videos(channel_id, url)`)
 
 	return nil
 }
@@ -147,9 +162,9 @@ func (db *DB) CreateDownload(d *Download) error {
 		sendFile = 1
 	}
 	result, err := db.conn.Exec(
-		`INSERT INTO downloads (url, title, status, output_path, messenger_id, user_id, chat_id, send_file) 
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.URL, d.Title, d.Status, d.OutputPath, d.MessengerID, d.UserID, d.ChatID, sendFile,
+		`INSERT INTO downloads (url, title, channel_name, status, output_path, messenger_id, user_id, chat_id, send_file) 
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.URL, d.Title, d.ChannelName, d.Status, d.OutputPath, d.MessengerID, d.UserID, d.ChatID, sendFile,
 	)
 	if err != nil {
 		return err
@@ -182,13 +197,21 @@ func (db *DB) UpdateDownloadError(id int64, status, errMsg string) error {
 	return err
 }
 
+func (db *DB) UpdateDownloadProgress(id int64, progress int) error {
+	_, err := db.conn.Exec(
+		`UPDATE downloads SET progress = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		progress, id,
+	)
+	return err
+}
+
 func (db *DB) GetDownload(id int64) (*Download, error) {
 	d := &Download{}
 	var sendFile int
 	err := db.conn.QueryRow(
-		`SELECT id, url, title, status, output_path, size, error_msg, created_at, updated_at, messenger_id, user_id, chat_id, send_file 
+		`SELECT id, url, title, channel_name, status, output_path, size, error_msg, progress, created_at, updated_at, messenger_id, user_id, chat_id, send_file 
 		 FROM downloads WHERE id = ?`, id,
-	).Scan(&d.ID, &d.URL, &d.Title, &d.Status, &d.OutputPath, &d.Size, &d.ErrorMsg, &d.CreatedAt, &d.UpdatedAt, &d.MessengerID, &d.UserID, &d.ChatID, &sendFile)
+	).Scan(&d.ID, &d.URL, &d.Title, &d.ChannelName, &d.Status, &d.OutputPath, &d.Size, &d.ErrorMsg, &d.Progress, &d.CreatedAt, &d.UpdatedAt, &d.MessengerID, &d.UserID, &d.ChatID, &sendFile)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +226,7 @@ func (db *DB) DeleteDownload(id int64) error {
 
 func (db *DB) ListDownloads() ([]Download, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, url, title, status, output_path, size, error_msg, created_at, updated_at, messenger_id, user_id, chat_id, send_file 
+		`SELECT id, url, title, channel_name, status, output_path, size, error_msg, progress, created_at, updated_at, messenger_id, user_id, chat_id, send_file 
 		 FROM downloads ORDER BY created_at DESC`,
 	)
 	if err != nil {
@@ -215,7 +238,7 @@ func (db *DB) ListDownloads() ([]Download, error) {
 	for rows.Next() {
 		var d Download
 		var sendFile int
-		if err := rows.Scan(&d.ID, &d.URL, &d.Title, &d.Status, &d.OutputPath, &d.Size, &d.ErrorMsg, &d.CreatedAt, &d.UpdatedAt, &d.MessengerID, &d.UserID, &d.ChatID, &sendFile); err != nil {
+		if err := rows.Scan(&d.ID, &d.URL, &d.Title, &d.ChannelName, &d.Status, &d.OutputPath, &d.Size, &d.ErrorMsg, &d.Progress, &d.CreatedAt, &d.UpdatedAt, &d.MessengerID, &d.UserID, &d.ChatID, &sendFile); err != nil {
 			return nil, err
 		}
 		d.SendFile = sendFile == 1
@@ -297,9 +320,9 @@ func (db *DB) CreateChannel(c *Channel) error {
 func (db *DB) GetChannel(id int64) (*Channel, error) {
 	c := &Channel{}
 	err := db.conn.QueryRow(
-		`SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at 
+		`SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at, new_videos_count
 		 FROM channels WHERE id = ?`, id,
-	).Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt)
+	).Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt, &c.NewVideosCount)
 	if err != nil {
 		return nil, err
 	}
@@ -309,9 +332,9 @@ func (db *DB) GetChannel(id int64) (*Channel, error) {
 func (db *DB) GetChannelByURL(url string, messengerID string, userID int64) (*Channel, error) {
 	c := &Channel{}
 	err := db.conn.QueryRow(
-		`SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at 
+		`SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at, new_videos_count
 		 FROM channels WHERE url = ? AND messenger_id = ? AND user_id = ?`, url, messengerID, userID,
-	).Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt)
+	).Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt, &c.NewVideosCount)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +343,7 @@ func (db *DB) GetChannelByURL(url string, messengerID string, userID int64) (*Ch
 
 func (db *DB) ListChannels(messengerID string, userID int64) ([]Channel, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at 
+		`SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at, new_videos_count
 		 FROM channels WHERE messenger_id = ? AND user_id = ? ORDER BY created_at DESC`,
 		messengerID, userID,
 	)
@@ -332,7 +355,7 @@ func (db *DB) ListChannels(messengerID string, userID int64) ([]Channel, error) 
 	var channels []Channel
 	for rows.Next() {
 		var c Channel
-		if err := rows.Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt, &c.NewVideosCount); err != nil {
 			return nil, err
 		}
 		channels = append(channels, c)
@@ -416,6 +439,112 @@ func (db *DB) CountVideos(channelID int64) (int, error) {
 	var count int
 	err := db.conn.QueryRow(
 		`SELECT COUNT(*) FROM videos WHERE channel_id = ?`, channelID,
+	).Scan(&count)
+	return count, err
+}
+
+func (db *DB) ListAllChannels() ([]Channel, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at, new_videos_count
+		 FROM channels ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var channels []Channel
+	for rows.Next() {
+		var c Channel
+		if err := rows.Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt, &c.NewVideosCount); err != nil {
+			return nil, err
+		}
+		channels = append(channels, c)
+	}
+
+	return channels, nil
+}
+
+func (db *DB) GetVideosByChannel(channelID int64, limit int) ([]Video, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, channel_id, url, title, duration, published, created_at 
+		 FROM videos WHERE channel_id = ? ORDER BY published DESC LIMIT ?`,
+		channelID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var videos []Video
+	for rows.Next() {
+		var v Video
+		if err := rows.Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.CreatedAt); err != nil {
+			return nil, err
+		}
+		videos = append(videos, v)
+	}
+
+	return videos, nil
+}
+
+func (db *DB) UpdateChannelNewVideosCount(id int64, count int) error {
+	_, err := db.conn.Exec(
+		`UPDATE channels SET new_videos_count = ? WHERE id = ?`, count, id,
+	)
+	return err
+}
+
+func (db *DB) ResetChannelNewVideosCount(id int64) error {
+	_, err := db.conn.Exec(
+		`UPDATE channels SET new_videos_count = 0 WHERE id = ?`, id,
+	)
+	return err
+}
+
+func (db *DB) GetDownloadedVideoURLs() (map[string]bool, error) {
+	urls := make(map[string]bool)
+
+	rows1, err := db.conn.Query(`SELECT url FROM downloads WHERE status = 'completed'`)
+	if err == nil {
+		defer rows1.Close()
+		for rows1.Next() {
+			var url string
+			if err := rows1.Scan(&url); err == nil {
+				urls[url] = true
+			}
+		}
+	}
+
+	rows2, err := db.conn.Query(`SELECT url FROM video_downloads`)
+	if err == nil {
+		defer rows2.Close()
+		for rows2.Next() {
+			var url string
+			if err := rows2.Scan(&url); err == nil {
+				urls[url] = true
+			}
+		}
+	}
+
+	return urls, nil
+}
+
+func (db *DB) MarkVideoDownloaded(url string) error {
+	_, err := db.conn.Exec(`INSERT OR IGNORE INTO video_downloads (url) VALUES (?)`, url)
+	return err
+}
+
+func (db *DB) UnmarkVideoDownloaded(url string) error {
+	_, err := db.conn.Exec(`DELETE FROM video_downloads WHERE url = ?`, url)
+	return err
+}
+
+func (db *DB) CountNewVideosSince(channelID int64, since time.Time) (int, error) {
+	var count int
+	err := db.conn.QueryRow(
+		`SELECT COUNT(*) FROM videos WHERE channel_id = ? AND created_at > ?`,
+		channelID, since,
 	).Scan(&count)
 	return count, err
 }

@@ -1,14 +1,18 @@
 package downloader
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Downloader struct {
@@ -18,9 +22,12 @@ type Downloader struct {
 }
 
 type DownloadRequest struct {
-	URL      string
-	OutputDir string
+	URL        string
+	OutputDir  string
+	OnProgress func(int)
 }
+
+var progressRe = regexp.MustCompile(`(\d+\.?\d*)%`)
 
 type DownloadResult struct {
 	OutputPath string
@@ -34,9 +41,10 @@ type ChannelInfo struct {
 }
 
 type VideoInfo struct {
-	URL      string
-	Title    string
-	Duration int
+	URL       string
+	Title     string
+	Duration  int
+	Published time.Time
 }
 
 func New(binaryPath, outputDir string) *Downloader {
@@ -64,15 +72,43 @@ func (d *Downloader) Download(ctx context.Context, req *DownloadRequest) (*Downl
 	dlArgs := []string{
 		"-o", outputTemplate,
 		"--print", "after_move:filename",
+		"--newline",
 		req.URL,
 	}
 
 	cmd := exec.CommandContext(ctx, d.binaryPath, dlArgs...)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	stderr, _ := cmd.StderrPipe()
+	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to download: %w", err)
+	}
+
+	if req.OnProgress != nil && stderr != nil {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			scanner := bufio.NewScanner(stderr)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if matches := progressRe.FindStringSubmatch(line); len(matches) > 1 {
+					if pct, err := strconv.ParseFloat(matches[1], 64); err == nil {
+						req.OnProgress(int(pct))
+					}
+				}
+			}
+		}()
+
+		if err := cmd.Wait(); err != nil {
+			wg.Wait()
+			return nil, fmt.Errorf("failed to download: %w", err)
+		}
+		wg.Wait()
+	} else {
+		if err := cmd.Wait(); err != nil {
+			return nil, fmt.Errorf("failed to download: %w", err)
+		}
 	}
 
 	dlPath := strings.TrimSpace(stdout.String())
@@ -109,12 +145,12 @@ func (d *Downloader) Download(ctx context.Context, req *DownloadRequest) (*Downl
 	}, nil
 }
 
-func (d *Downloader) GetInfo(ctx context.Context, url string) (string, error) {
+func (d *Downloader) GetInfo(ctx context.Context, url string) (string, string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	args := []string{
-		"--print", "title",
+		"--print", "%(title)s|||%(channel)s",
 		"--skip-download",
 		url,
 	}
@@ -124,10 +160,15 @@ func (d *Downloader) GetInfo(ctx context.Context, url string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("failed to get info: %w", err)
+		return "", "", fmt.Errorf("failed to get info: %w", err)
 	}
 
-	return strings.TrimSpace(stdout.String()), nil
+	result := strings.TrimSpace(stdout.String())
+	parts := strings.SplitN(result, "|||", 2)
+	if len(parts) >= 2 {
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
+	}
+	return result, "", nil
 }
 
 func mkdirAll(path string) error {
@@ -246,7 +287,7 @@ func (d *Downloader) GetChannelVideos(ctx context.Context, channelURL string, li
 
 	args := []string{
 		"--flat-playlist",
-		"--print", "%(url)s|||%(title)s|||%(duration)s",
+		"--print", "%(url)s|||%(upload_date)s|||%(title)s|||%(duration)s",
 		"--playlist-end", fmt.Sprintf("%d", limit),
 		"--skip-download",
 		channelURL,
@@ -268,20 +309,26 @@ func (d *Downloader) GetChannelVideos(ctx context.Context, channelURL string, li
 			continue
 		}
 
-		parts := strings.SplitN(line, "|||", 3)
-		if len(parts) < 2 {
+		parts := strings.SplitN(line, "|||", 4)
+		if len(parts) < 3 {
 			continue
 		}
 
 		duration := 0
-		if len(parts) >= 3 {
-			fmt.Sscanf(parts[2], "%d", &duration)
+		if len(parts) >= 4 {
+			fmt.Sscanf(parts[3], "%d", &duration)
+		}
+
+		var published time.Time
+		if d := strings.TrimSpace(parts[1]); d != "" && d != "NA" {
+			published, _ = time.Parse("20060102", d)
 		}
 
 		videos = append(videos, VideoInfo{
-			URL:      parts[0],
-			Title:    parts[1],
-			Duration: duration,
+			URL:       parts[0],
+			Title:     parts[2],
+			Duration:  duration,
+			Published: published,
 		})
 	}
 
