@@ -61,6 +61,7 @@ type Video struct {
 	Title     string
 	Duration  int
 	Published time.Time
+	Position  int
 	Notified  bool
 	CreatedAt time.Time
 }
@@ -152,6 +153,7 @@ func (db *DB) migrate() error {
 
 	db.conn.Exec(`DELETE FROM videos WHERE id NOT IN (SELECT MIN(id) FROM videos GROUP BY channel_id, url)`)
 	db.conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_channel_url ON videos(channel_id, url)`)
+	db.conn.Exec(`ALTER TABLE videos ADD COLUMN position INTEGER DEFAULT 0`)
 
 	return nil
 }
@@ -378,9 +380,10 @@ func (db *DB) UpdateChannelLastCheck(id int64) error {
 
 func (db *DB) UpsertVideo(v *Video) error {
 	result, err := db.conn.Exec(
-		`INSERT OR IGNORE INTO videos (channel_id, url, title, duration, published) 
-		 VALUES (?, ?, ?, ?, ?)`,
-		v.ChannelID, v.URL, v.Title, v.Duration, v.Published,
+		`INSERT INTO videos (channel_id, url, title, duration, published, position) 
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(channel_id, url) DO UPDATE SET title=excluded.title, duration=excluded.duration, position=excluded.position`,
+		v.ChannelID, v.URL, v.Title, v.Duration, v.Published, v.Position,
 	)
 	if err != nil {
 		return err
@@ -391,8 +394,8 @@ func (db *DB) UpsertVideo(v *Video) error {
 
 func (db *DB) ListNewVideos(channelID int64, since time.Time) ([]Video, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, channel_id, url, title, duration, published, created_at 
-		 FROM videos WHERE channel_id = ? AND created_at > ? ORDER BY published DESC`,
+		`SELECT id, channel_id, url, title, duration, published, position, created_at 
+		 FROM videos WHERE channel_id = ? AND created_at > ? ORDER BY position ASC`,
 		channelID, since,
 	)
 	if err != nil {
@@ -403,7 +406,7 @@ func (db *DB) ListNewVideos(channelID int64, since time.Time) ([]Video, error) {
 	var videos []Video
 	for rows.Next() {
 		var v Video
-		if err := rows.Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.Position, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		videos = append(videos, v)
@@ -414,8 +417,8 @@ func (db *DB) ListNewVideos(channelID int64, since time.Time) ([]Video, error) {
 
 func (db *DB) ListAllVideos(channelID int64, limit, offset int) ([]Video, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, channel_id, url, title, duration, published, created_at 
-		 FROM videos WHERE channel_id = ? ORDER BY published DESC LIMIT ? OFFSET ?`,
+		`SELECT id, channel_id, url, title, duration, published, position, created_at 
+		 FROM videos WHERE channel_id = ? ORDER BY position ASC LIMIT ? OFFSET ?`,
 		channelID, limit, offset,
 	)
 	if err != nil {
@@ -426,7 +429,7 @@ func (db *DB) ListAllVideos(channelID int64, limit, offset int) ([]Video, error)
 	var videos []Video
 	for rows.Next() {
 		var v Video
-		if err := rows.Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.Position, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		videos = append(videos, v)
@@ -467,8 +470,8 @@ func (db *DB) ListAllChannels() ([]Channel, error) {
 
 func (db *DB) GetVideosByChannel(channelID int64, limit int) ([]Video, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, channel_id, url, title, duration, published, created_at 
-		 FROM videos WHERE channel_id = ? ORDER BY published DESC LIMIT ?`,
+		`SELECT id, channel_id, url, title, duration, published, position, created_at 
+		 FROM videos WHERE channel_id = ? ORDER BY position ASC LIMIT ?`,
 		channelID, limit,
 	)
 	if err != nil {
@@ -479,13 +482,20 @@ func (db *DB) GetVideosByChannel(channelID int64, limit int) ([]Video, error) {
 	var videos []Video
 	for rows.Next() {
 		var v Video
-		if err := rows.Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.Position, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		videos = append(videos, v)
 	}
 
 	return videos, nil
+}
+
+func (db *DB) UpdateVideoPublished(id int64, published time.Time) error {
+	_, err := db.conn.Exec(
+		`UPDATE videos SET published = ? WHERE id = ?`, published, id,
+	)
+	return err
 }
 
 func (db *DB) UpdateChannelNewVideosCount(id int64, count int) error {

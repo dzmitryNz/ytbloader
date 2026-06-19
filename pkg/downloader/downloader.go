@@ -41,10 +41,9 @@ type ChannelInfo struct {
 }
 
 type VideoInfo struct {
-	URL       string
-	Title     string
-	Duration  int
-	Published time.Time
+	URL      string
+	Title    string
+	Duration int
 }
 
 func New(binaryPath, outputDir string) *Downloader {
@@ -287,7 +286,7 @@ func (d *Downloader) GetChannelVideos(ctx context.Context, channelURL string, li
 
 	args := []string{
 		"--flat-playlist",
-		"--print", "%(url)s|||%(upload_date)s|||%(title)s|||%(duration)s",
+		"--print", "%(url)s|||%(title)s|||%(duration)s",
 		"--playlist-end", fmt.Sprintf("%d", limit),
 		"--skip-download",
 		channelURL,
@@ -296,12 +295,21 @@ func (d *Downloader) GetChannelVideos(ctx context.Context, channelURL string, li
 	cmd := exec.CommandContext(ctx, d.binaryPath, args...)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	stderr, _ := cmd.StderrPipe()
+	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to get channel videos: %w", err)
 	}
 
 	var videos []VideoInfo
+	scanner := bufio.NewScanner(stderr)
+	go func() {
+		for scanner.Scan() {}
+	}()
+
+	if err := cmd.Wait(); err != nil {
+		return nil, fmt.Errorf("failed to get channel videos: %w", err)
+	}
+
 	lines := strings.Split(stdout.String(), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -309,28 +317,49 @@ func (d *Downloader) GetChannelVideos(ctx context.Context, channelURL string, li
 			continue
 		}
 
-		parts := strings.SplitN(line, "|||", 4)
-		if len(parts) < 3 {
+		parts := strings.SplitN(line, "|||", 3)
+		if len(parts) < 2 {
 			continue
 		}
 
 		duration := 0
-		if len(parts) >= 4 {
-			fmt.Sscanf(parts[3], "%d", &duration)
-		}
-
-		var published time.Time
-		if d := strings.TrimSpace(parts[1]); d != "" && d != "NA" {
-			published, _ = time.Parse("20060102", d)
+		if len(parts) >= 3 {
+			fmt.Sscanf(parts[2], "%d", &duration)
 		}
 
 		videos = append(videos, VideoInfo{
-			URL:       parts[0],
-			Title:     parts[2],
-			Duration:  duration,
-			Published: published,
+			URL:      parts[0],
+			Title:    parts[1],
+			Duration: duration,
 		})
 	}
 
 	return videos, nil
+}
+
+func (d *Downloader) GetVideoPublishDate(ctx context.Context, videoURL string) time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	args := []string{
+		"--print", "%(upload_date)s",
+		"--skip-download",
+		videoURL,
+	}
+
+	cmd := exec.CommandContext(ctx, d.binaryPath, args...)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return time.Time{}
+	}
+
+	dateStr := strings.TrimSpace(stdout.String())
+	if dateStr == "" || dateStr == "NA" {
+		return time.Time{}
+	}
+
+	t, _ := time.Parse("20060102", dateStr)
+	return t
 }

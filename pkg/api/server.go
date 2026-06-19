@@ -446,14 +446,27 @@ func (s *Server) refreshSubscription(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
-	for _, v := range videos {
-		s.db.UpsertVideo(&db.Video{
+	for i, v := range videos {
+		video := &db.Video{
 			ChannelID: channelID,
 			URL:       v.URL,
 			Title:     v.Title,
 			Duration:  v.Duration,
-			Published: v.Published,
-		})
+			Position:  i + 1,
+		}
+		s.db.UpsertVideo(video)
+	}
+
+	dbVideos, _ := s.db.GetVideosByChannel(channelID, 50)
+	fetched := 0
+	for _, v := range dbVideos {
+		if v.Published.IsZero() && fetched < 10 {
+			pubDate := s.downloader.GetVideoPublishDate(r.Context(), v.URL)
+			if !pubDate.IsZero() {
+				s.db.UpdateVideoPublished(v.ID, pubDate)
+			}
+			fetched++
+		}
 	}
 
 	_ = s.db.UpdateChannelLastCheck(channelID)
@@ -461,7 +474,6 @@ func (s *Server) refreshSubscription(w http.ResponseWriter, r *http.Request, id 
 	newCount, _ := s.db.CountNewVideosSince(channelID, oldLastCheck)
 	_ = s.db.UpdateChannelNewVideosCount(channelID, newCount)
 
-	dbVideos, _ := s.db.GetVideosByChannel(channelID, 50)
 	s.respond(w, Response{Success: true, Data: map[string]interface{}{
 		"videos":   dbVideos,
 		"newCount": newCount,
