@@ -79,8 +79,24 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 .video-item:hover .video-thumb-wrap{display:block}
 .video-thumb{width:320px;border-radius:6px;display:block;box-shadow:0 4px 12px rgba(0,0,0,0.6)}
 .new-badge{background:#667eea;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px;font-weight:600}
-.btn-unsub{border-color:#662222;color:#ff6666}
-.btn-unsub:hover{background:#441111}
+.channel-item{position:relative}
+.channel-header{padding-right:28px}
+.channel-close{position:absolute;top:8px;right:10px;width:22px;height:22px;padding:0;line-height:1;border:none;border-radius:4px;background:transparent;color:#666;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.channel-close:hover{background:#441111;color:#ff6666}
+.input-row .btn-icon{flex:0 0 40px;width:40px;height:40px;padding:0;display:flex;align-items:center;justify-content:center;font-size:18px;line-height:1}
+.btn-icon:disabled{opacity:.5;cursor:not-allowed}
+.btn-icon.spinning{animation:spin 1s linear infinite}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+.refresh-count{font-size:12px;color:#667eea;font-weight:400;margin-left:8px}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center;padding:16px}
+.modal-overlay.open{display:flex}
+.modal{background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:20px;max-width:400px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.6)}
+.modal-text{font-size:14px;color:#e0e0e0;line-height:1.5;margin-bottom:20px;word-break:break-word}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end}
+.modal-btn{padding:8px 16px;border:1px solid #444;border-radius:6px;font-size:13px;cursor:pointer;background:#2a2a3e;color:#aaa}
+.modal-btn:hover{background:#3a3a4e;color:#fff}
+.modal-btn-danger{border-color:#662222;color:#ff6666}
+.modal-btn-danger:hover{background:#441111;color:#ff8888}
 @media(max-width:600px){
 .header{padding:12px 16px}
 .header h1{font-size:18px}
@@ -95,6 +111,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 .channel-header{flex-direction:column;align-items:flex-start}
 .channel-actions{width:100%}
 .channel-actions button{flex:1}
+.input-row .btn-icon{align-self:flex-end;width:40px}
 .video-item{flex-wrap:wrap}
 .video-thumb-wrap{display:none!important}
 }
@@ -123,13 +140,24 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 
 <div id="page-subscriptions" class="page">
 <div class="add-form">
-<h2>Add subscription</h2>
+<h2>Add subscription<span id="refresh-all-count" class="refresh-count"></span></h2>
 <div class="input-row">
 <input type="text" id="sub-url" placeholder="https://www.youtube.com/@channel">
 <button id="sub-btn" onclick="addSubscription()">Subscribe</button>
+<button id="refresh-all-btn" class="btn-icon" title="Refresh all subscriptions" onclick="refreshAllChannels()">&#8635;</button>
 </div>
 </div>
 <div id="sub-list" class="downloads"></div>
+</div>
+</div>
+
+<div id="modal" class="modal-overlay" onclick="if(event.target===this)closeModal(false)">
+<div class="modal">
+<div class="modal-text" id="modal-text"></div>
+<div class="modal-actions">
+<button class="modal-btn" onclick="closeModal(false)">Cancel</button>
+<button class="modal-btn modal-btn-danger" id="modal-ok" onclick="closeModal(true)">Delete</button>
+</div>
 </div>
 </div>
 <script>
@@ -138,6 +166,24 @@ const TOKEN_KEY = 'ytbloader_token';
 let timer;
 let activeTab = 'downloads';
 let videoUrls = {};
+let channelNames = {};
+
+let modalResolve = null;
+function confirmModal(text, okLabel) {
+  document.getElementById('modal-text').textContent = text;
+  document.getElementById('modal-ok').textContent = okLabel || 'Delete';
+  document.getElementById('modal').classList.add('open');
+  return new Promise(function(resolve) { modalResolve = resolve; });
+}
+
+function closeModal(result) {
+  document.getElementById('modal').classList.remove('open');
+  if (modalResolve) { modalResolve(result); modalResolve = null; }
+}
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && modalResolve) closeModal(false);
+});
 
 // The API is only guarded when API_TOKEN is set on the server; until we get a
 // 401 back nothing here asks the user for anything.
@@ -287,7 +333,9 @@ async function loadSubs() {
     el.innerHTML = channels.map(c => {
       const lastCheck = c.LastCheck ? new Date(c.LastCheck).toLocaleString() : 'never';
       const newBadge = c.NewVideosCount > 0 ? '<span class="new-badge">' + c.NewVideosCount + ' new</span>' : '';
+      channelNames[c.ID] = chName(c);
       return '<div class="channel-item" id="ch-' + c.ID + '">' +
+        '<button class="channel-close" title="Unsubscribe" onclick="deleteSubscription(' + c.ID + ')">&#10005;</button>' +
         '<div class="channel-header"><div>' +
         '<div class="channel-name">' + esc(chName(c)) + newBadge + '</div>' +
         '<div class="channel-url">' + esc(c.URL) + '</div>' +
@@ -296,7 +344,6 @@ async function loadSubs() {
         '<span class="channel-status" id="status-' + c.ID + '"></span>' +
         '<button class="btn-refresh" onclick="refreshChannel(' + c.ID + ')">Refresh</button>' +
         '<button class="btn-toggle" onclick="toggleVideos(' + c.ID + ')">Videos</button>' +
-        '<button class="btn-unsub" onclick="deleteSubscription(' + c.ID + ')">Unsubscribe</button>' +
         '</div></div>' +
         '<div class="channel-videos" id="vids-' + c.ID + '"></div></div>';
     }).join('');
@@ -400,9 +447,48 @@ async function toggleVideoDownloaded(e, url, channelId) {
 }
 
 async function deleteSubscription(id) {
-  if (!confirm('Unsubscribe from this channel?')) return;
+  var name = channelNames[id] || 'this channel';
+  var ok = await confirmModal('Unsubscribe from "' + name + '"?', 'Unsubscribe');
+  if (!ok) return;
   await fetch(API + '/subscriptions/' + id, {method:'DELETE'});
   loadSubs();
+}
+
+// Refreshes channels one by one: each refresh fans out into several yt-dlp
+// calls, so firing them all at once would just hammer the box.
+async function refreshAllChannels() {
+  var btn = document.getElementById('refresh-all-btn');
+  var label = document.getElementById('refresh-all-count');
+  if (btn.disabled) return;
+
+  var channels = [];
+  try {
+    const res = await fetch(API + '/subscriptions');
+    const data = await res.json();
+    if (!data.success) return;
+    channels = data.data || [];
+  } catch(e) { return; }
+
+  if (!channels.length) return;
+
+  btn.disabled = true;
+  btn.classList.add('spinning');
+  try {
+    for (var i = 0; i < channels.length; i++) {
+      label.textContent = (i + 1) + '/' + channels.length;
+      var statusEl = document.getElementById('status-' + channels[i].ID);
+      if (statusEl) statusEl.textContent = 'Refreshing...';
+      try {
+        await fetch(API + '/subscriptions/' + channels[i].ID + '/refresh', {method:'POST'});
+      } catch(e) {}
+      if (statusEl) statusEl.textContent = '';
+    }
+  } finally {
+    label.textContent = '';
+    btn.classList.remove('spinning');
+    btn.disabled = false;
+    loadSubs();
+  }
 }
 
 function formatSize(b) {
