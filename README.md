@@ -105,6 +105,8 @@ docker-compose up -d
 | `MATTERMOST_BOT_TOKEN` | Токен Mattermost бота | (пусто) |
 | `YTDLP_PATH` | Путь к бинарнику yt-dlp | `yt-dlp` |
 | `YTDLP_OUTPUT_DIR` | Директория для MP3 файлов | `./downloads` |
+| `YTDLP_MAX_CONCURRENT` | Сколько загрузок выполняется одновременно | `2` |
+| `API_TOKEN` | Токен для HTTP API (пусто — без аутентификации) | — |
 
 ## REST API
 
@@ -269,6 +271,7 @@ GET /api/tasks/:id
 | `downloading` | Скачивается |
 | `completed` | Успешно скачано |
 | `failed` | Ошибка при скачивании |
+| `cancelled` | Отменено пользователем |
 
 ### Статусы задач
 

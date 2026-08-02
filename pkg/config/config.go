@@ -17,6 +17,8 @@ type Config struct {
 
 type ServerConfig struct {
 	Port string
+	// APIToken guards the HTTP API. Empty means no authentication.
+	APIToken string
 }
 
 type DatabaseConfig struct {
@@ -37,14 +39,16 @@ type MatterConfig struct {
 }
 
 type YTDLConfig struct {
-	BinaryPath string
-	OutputDir  string
+	BinaryPath    string
+	OutputDir     string
+	MaxConcurrent int
 }
 
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Port: getEnv("SERVER_PORT", "8070"),
+			Port:     getEnv("SERVER_PORT", "8070"),
+			APIToken: getEnv("API_TOKEN", ""),
 		},
 		Database: DatabaseConfig{
 			Path: getEnv("DB_PATH", "ytbloader.db"),
@@ -60,8 +64,9 @@ func Load() *Config {
 			BotToken: getEnv("MATTERMOST_BOT_TOKEN", ""),
 		},
 		YTDL: YTDLConfig{
-			BinaryPath: getEnv("YTDLP_PATH", "yt-dlp"),
-			OutputDir:  getEnv("YTDLP_OUTPUT_DIR", "./downloads"),
+			BinaryPath:    getEnv("YTDLP_PATH", "yt-dlp"),
+			OutputDir:     getEnv("YTDLP_OUTPUT_DIR", "./downloads"),
+			MaxConcurrent: getEnvInt("YTDLP_MAX_CONCURRENT", 2),
 		},
 		WebDir: getEnv("WEB_DIR", "web"),
 	}

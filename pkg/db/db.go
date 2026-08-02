@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -67,10 +68,15 @@ type Video struct {
 }
 
 func New(dbPath string) (*DB, error) {
-	conn, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
+	conn, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// SQLite allows a single writer. Keeping one connection makes concurrent
+	// downloads queue up in the driver instead of failing with SQLITE_BUSY.
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
 
 	db := &DB{conn: conn}
 	if err := db.migrate(); err != nil {
@@ -158,6 +164,10 @@ func (db *DB) migrate() error {
 	return nil
 }
 
+const downloadColumns = `SELECT id, url, title, channel_name, status, output_path, size, error_msg, progress, created_at, updated_at, messenger_id, user_id, chat_id, send_file`
+
+const videoColumns = `SELECT id, channel_id, url, title, duration, published, position, created_at`
+
 func (db *DB) CreateDownload(d *Download) error {
 	sendFile := 0
 	if d.SendFile {
@@ -210,10 +220,7 @@ func (db *DB) UpdateDownloadProgress(id int64, progress int) error {
 func (db *DB) GetDownload(id int64) (*Download, error) {
 	d := &Download{}
 	var sendFile int
-	err := db.conn.QueryRow(
-		`SELECT id, url, title, channel_name, status, output_path, size, error_msg, progress, created_at, updated_at, messenger_id, user_id, chat_id, send_file 
-		 FROM downloads WHERE id = ?`, id,
-	).Scan(&d.ID, &d.URL, &d.Title, &d.ChannelName, &d.Status, &d.OutputPath, &d.Size, &d.ErrorMsg, &d.Progress, &d.CreatedAt, &d.UpdatedAt, &d.MessengerID, &d.UserID, &d.ChatID, &sendFile)
+	err := db.conn.QueryRow(downloadColumns+` FROM downloads WHERE id = ?`, id).Scan(&d.ID, &d.URL, &d.Title, &d.ChannelName, &d.Status, &d.OutputPath, &d.Size, &d.ErrorMsg, &d.Progress, &d.CreatedAt, &d.UpdatedAt, &d.MessengerID, &d.UserID, &d.ChatID, &sendFile)
 	if err != nil {
 		return nil, err
 	}
@@ -227,13 +234,37 @@ func (db *DB) DeleteDownload(id int64) error {
 }
 
 func (db *DB) ListDownloads() ([]Download, error) {
+	rows, err := db.conn.Query(downloadColumns + ` FROM downloads ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	return scanDownloads(rows)
+}
+
+// ListDownloadsByStatus is used on startup to pick up downloads that were
+// interrupted by a restart and left hanging in a non-terminal status.
+func (db *DB) ListDownloadsByStatus(statuses ...string) ([]Download, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(statuses)), ",")
+	args := make([]interface{}, len(statuses))
+	for i, s := range statuses {
+		args[i] = s
+	}
+
 	rows, err := db.conn.Query(
-		`SELECT id, url, title, channel_name, status, output_path, size, error_msg, progress, created_at, updated_at, messenger_id, user_id, chat_id, send_file 
-		 FROM downloads ORDER BY created_at DESC`,
+		downloadColumns+` FROM downloads WHERE status IN (`+placeholders+`) ORDER BY created_at ASC`,
+		args...,
 	)
 	if err != nil {
 		return nil, err
 	}
+	return scanDownloads(rows)
+}
+
+func scanDownloads(rows *sql.Rows) ([]Download, error) {
 	defer rows.Close()
 
 	var downloads []Download
@@ -247,7 +278,7 @@ func (db *DB) ListDownloads() ([]Download, error) {
 		downloads = append(downloads, d)
 	}
 
-	return downloads, nil
+	return downloads, rows.Err()
 }
 
 func (db *DB) CreateTask(t *Task) error {
@@ -307,16 +338,15 @@ func (db *DB) ListTasks(messengerID string, userID int64) ([]Task, error) {
 }
 
 func (db *DB) CreateChannel(c *Channel) error {
-	result, err := db.conn.Exec(
-		`INSERT OR IGNORE INTO channels (url, name, messenger_id, user_id, chat_id) 
-		 VALUES (?, ?, ?, ?, ?)`,
+	// RETURNING gives back the row id on both the insert and the conflict path;
+	// LastInsertId() would report a stale rowid when the insert is skipped.
+	return db.conn.QueryRow(
+		`INSERT INTO channels (url, name, messenger_id, user_id, chat_id)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(url, user_id, messenger_id) DO UPDATE SET name = excluded.name
+		 RETURNING id`,
 		c.URL, c.Name, c.MessengerID, c.UserID, c.ChatID,
-	)
-	if err != nil {
-		return err
-	}
-	c.ID, _ = result.LastInsertId()
-	return nil
+	).Scan(&c.ID)
 }
 
 func (db *DB) GetChannel(id int64) (*Channel, error) {
@@ -379,51 +409,38 @@ func (db *DB) UpdateChannelLastCheck(id int64) error {
 }
 
 func (db *DB) UpsertVideo(v *Video) error {
-	result, err := db.conn.Exec(
-		`INSERT INTO videos (channel_id, url, title, duration, published, position) 
+	return db.conn.QueryRow(
+		`INSERT INTO videos (channel_id, url, title, duration, published, position)
 		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(channel_id, url) DO UPDATE SET title=excluded.title, duration=excluded.duration, position=excluded.position`,
+		 ON CONFLICT(channel_id, url) DO UPDATE SET title=excluded.title, duration=excluded.duration, position=excluded.position
+		 RETURNING id`,
 		v.ChannelID, v.URL, v.Title, v.Duration, v.Published, v.Position,
-	)
-	if err != nil {
-		return err
-	}
-	v.ID, _ = result.LastInsertId()
-	return nil
+	).Scan(&v.ID)
 }
 
 func (db *DB) ListNewVideos(channelID int64, since time.Time) ([]Video, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, channel_id, url, title, duration, published, position, created_at 
-		 FROM videos WHERE channel_id = ? AND created_at > ? ORDER BY position ASC`,
+		videoColumns+` FROM videos WHERE channel_id = ? AND created_at > ? ORDER BY position ASC`,
 		channelID, since,
 	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var videos []Video
-	for rows.Next() {
-		var v Video
-		if err := rows.Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.Position, &v.CreatedAt); err != nil {
-			return nil, err
-		}
-		videos = append(videos, v)
-	}
-
-	return videos, nil
+	return scanVideos(rows)
 }
 
 func (db *DB) ListAllVideos(channelID int64, limit, offset int) ([]Video, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, channel_id, url, title, duration, published, position, created_at 
-		 FROM videos WHERE channel_id = ? ORDER BY position ASC LIMIT ? OFFSET ?`,
+		videoColumns+` FROM videos WHERE channel_id = ? ORDER BY position ASC LIMIT ? OFFSET ?`,
 		channelID, limit, offset,
 	)
 	if err != nil {
 		return nil, err
 	}
+	return scanVideos(rows)
+}
+
+func scanVideos(rows *sql.Rows) ([]Video, error) {
 	defer rows.Close()
 
 	var videos []Video
@@ -435,7 +452,7 @@ func (db *DB) ListAllVideos(channelID int64, limit, offset int) ([]Video, error)
 		videos = append(videos, v)
 	}
 
-	return videos, nil
+	return videos, rows.Err()
 }
 
 func (db *DB) CountVideos(channelID int64) (int, error) {
@@ -470,25 +487,13 @@ func (db *DB) ListAllChannels() ([]Channel, error) {
 
 func (db *DB) GetVideosByChannel(channelID int64, limit int) ([]Video, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, channel_id, url, title, duration, published, position, created_at 
-		 FROM videos WHERE channel_id = ? ORDER BY position ASC LIMIT ?`,
+		videoColumns+` FROM videos WHERE channel_id = ? ORDER BY position ASC LIMIT ?`,
 		channelID, limit,
 	)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var videos []Video
-	for rows.Next() {
-		var v Video
-		if err := rows.Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.Position, &v.CreatedAt); err != nil {
-			return nil, err
-		}
-		videos = append(videos, v)
-	}
-
-	return videos, nil
+	return scanVideos(rows)
 }
 
 func (db *DB) UpdateVideoPublished(id int64, published time.Time) error {

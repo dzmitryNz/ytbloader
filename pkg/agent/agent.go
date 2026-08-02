@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mitry/ytbloader/pkg/db"
 	"github.com/mitry/ytbloader/pkg/downloader"
@@ -21,12 +22,15 @@ type Agent struct {
 }
 
 type Response struct {
-	Text      string
-	HasFile   bool
-	FilePath  string
+	Text     string
+	HasFile  bool
+	FilePath string
 }
 
 const videosPerPage = 10
+
+// progressWriteInterval caps how often download progress is persisted.
+const progressWriteInterval = 3 * time.Second
 
 func New(database *db.DB, dl *downloader.Downloader) *Agent {
 	return &Agent{
@@ -136,6 +140,22 @@ func (a *Agent) ProcessDownload(ctx context.Context, d *db.Download) {
 	}()
 }
 
+// ResumeInterrupted re-queues downloads that a restart left in a non-terminal
+// status, which would otherwise sit in the list forever. Returns how many were
+// picked up.
+func (a *Agent) ResumeInterrupted(ctx context.Context) (int, error) {
+	downloads, err := a.db.ListDownloadsByStatus("pending", "downloading")
+	if err != nil {
+		return 0, err
+	}
+
+	for i := range downloads {
+		a.ProcessDownload(ctx, &downloads[i])
+	}
+
+	return len(downloads), nil
+}
+
 func (a *Agent) CancelDownload(id int64) bool {
 	a.mu.RLock()
 	cancel, ok := a.cancels[id]
@@ -148,15 +168,34 @@ func (a *Agent) CancelDownload(id int64) bool {
 }
 
 func (a *Agent) processDownload(ctx context.Context, d *db.Download) {
-	_ = a.db.UpdateDownloadStatus(d.ID, "downloading")
+	_ = a.db.UpdateDownloadStatus(d.ID, "pending")
+
+	// yt-dlp emits a progress line many times per second; OnProgress runs on a
+	// single goroutine, so plain variables are enough to rate-limit the writes.
+	var (
+		lastWrite time.Time
+		lastPct   int
+	)
 
 	result, err := a.downloader.Download(ctx, &downloader.DownloadRequest{
 		URL: d.URL,
+		OnStart: func() {
+			_ = a.db.UpdateDownloadStatus(d.ID, "downloading")
+		},
 		OnProgress: func(pct int) {
+			if pct == lastPct || time.Since(lastWrite) < progressWriteInterval {
+				return
+			}
+			lastPct = pct
+			lastWrite = time.Now()
 			_ = a.db.UpdateDownloadProgress(d.ID, pct)
 		},
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			_ = a.db.UpdateDownloadError(d.ID, "cancelled", "")
+			return
+		}
 		_ = a.db.UpdateDownloadError(d.ID, "failed", err.Error())
 		return
 	}
@@ -351,20 +390,25 @@ func (a *Agent) handleNewVideos(ctx context.Context, messengerID string, userID 
 			continue
 		}
 
-		var newVideos []db.Video
-		for _, v := range videos {
-			video := &db.Video{
+		// Everything stored after the previous check is what's actually new;
+		// UpsertVideo leaves created_at untouched for rows we already had.
+		lastCheck := ch.LastCheck
+
+		for i, v := range videos {
+			_ = a.db.UpsertVideo(&db.Video{
 				ChannelID: ch.ID,
 				URL:       v.URL,
 				Title:     v.Title,
 				Duration:  v.Duration,
-			}
-			a.db.UpsertVideo(video)
-
-			if v.URL != "" {
-				newVideos = append(newVideos, *video)
-			}
+				Position:  i + 1,
+			})
 		}
+
+		newVideos, err := a.db.ListNewVideos(ch.ID, lastCheck)
+		if err != nil {
+			continue
+		}
+		_ = a.db.UpdateChannelLastCheck(ch.ID)
 
 		if len(newVideos) > 0 {
 			allNewVideos = append(allNewVideos, struct {

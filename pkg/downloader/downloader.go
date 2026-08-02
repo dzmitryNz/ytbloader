@@ -18,12 +18,13 @@ import (
 type Downloader struct {
 	binaryPath string
 	outputDir  string
-	mu         sync.Mutex
+	sem        chan struct{}
 }
 
 type DownloadRequest struct {
 	URL        string
 	OutputDir  string
+	OnStart    func()
 	OnProgress func(int)
 }
 
@@ -46,16 +47,28 @@ type VideoInfo struct {
 	Duration int
 }
 
-func New(binaryPath, outputDir string) *Downloader {
+func New(binaryPath, outputDir string, maxConcurrent int) *Downloader {
+	if maxConcurrent < 1 {
+		maxConcurrent = 1
+	}
 	return &Downloader{
 		binaryPath: binaryPath,
 		outputDir:  outputDir,
+		sem:        make(chan struct{}, maxConcurrent),
 	}
 }
 
 func (d *Downloader) Download(ctx context.Context, req *DownloadRequest) (*DownloadResult, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	select {
+	case d.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-d.sem }()
+
+	if req.OnStart != nil {
+		req.OnStart()
+	}
 
 	outputDir := req.OutputDir
 	if outputDir == "" {
@@ -72,7 +85,7 @@ func (d *Downloader) Download(ctx context.Context, req *DownloadRequest) (*Downl
 		"-o", outputTemplate,
 		"--print", "after_move:filename",
 		"--newline",
-		req.URL,
+		"--", req.URL,
 	}
 
 	cmd := exec.CommandContext(ctx, d.binaryPath, dlArgs...)
@@ -145,13 +158,10 @@ func (d *Downloader) Download(ctx context.Context, req *DownloadRequest) (*Downl
 }
 
 func (d *Downloader) GetInfo(ctx context.Context, url string) (string, string, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	args := []string{
 		"--print", "%(title)s|||%(channel)s",
 		"--skip-download",
-		url,
+		"--", url,
 	}
 
 	cmd := exec.CommandContext(ctx, d.binaryPath, args...)
@@ -182,84 +192,12 @@ func fileSize(path string) int64 {
 	return info.Size()
 }
 
-func dirFiles(dir string) map[string]bool {
-	files := make(map[string]bool)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return files
-	}
-	for _, e := range entries {
-		files[e.Name()] = true
-	}
-	return files
-}
-
-func findNewFile(before map[string]bool, dir string) string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return ""
-	}
-	var newest string
-	var newestTime int64
-	for _, e := range entries {
-		if before[e.Name()] {
-			continue
-		}
-		if e.IsDir() {
-			continue
-		}
-		ext := filepath.Ext(e.Name())
-		if ext != ".mp3" && ext != ".webm" && ext != ".m4a" && ext != ".opus" && ext != ".ogg" {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().UnixNano() > newestTime {
-			newestTime = info.ModTime().UnixNano()
-			newest = filepath.Join(dir, e.Name())
-		}
-	}
-	return newest
-}
-
-func findNewestAudio(dir string) string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return ""
-	}
-	var newest string
-	var newestTime int64
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		ext := filepath.Ext(e.Name())
-		if ext != ".mp3" && ext != ".webm" && ext != ".m4a" && ext != ".opus" && ext != ".ogg" {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().UnixNano() > newestTime {
-			newestTime = info.ModTime().UnixNano()
-			newest = filepath.Join(dir, e.Name())
-		}
-	}
-	return newest
-}
-
 func (d *Downloader) GetChannelInfo(ctx context.Context, url string) (*ChannelInfo, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	args := []string{
 		"--print", "%(channel)s|||%(channel_url)s",
 		"--playlist-items", "0",
 		"--skip-download",
-		url,
+		"--", url,
 	}
 
 	cmd := exec.CommandContext(ctx, d.binaryPath, args...)
@@ -281,15 +219,12 @@ func (d *Downloader) GetChannelInfo(ctx context.Context, url string) (*ChannelIn
 }
 
 func (d *Downloader) GetChannelVideos(ctx context.Context, channelURL string, limit int) ([]VideoInfo, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	args := []string{
 		"--flat-playlist",
 		"--print", "%(url)s|||%(title)s|||%(duration)s",
 		"--playlist-end", fmt.Sprintf("%d", limit),
 		"--skip-download",
-		channelURL,
+		"--", channelURL,
 	}
 
 	cmd := exec.CommandContext(ctx, d.binaryPath, args...)
@@ -300,15 +235,22 @@ func (d *Downloader) GetChannelVideos(ctx context.Context, channelURL string, li
 		return nil, fmt.Errorf("failed to get channel videos: %w", err)
 	}
 
-	var videos []VideoInfo
-	scanner := bufio.NewScanner(stderr)
+	// cmd.Wait closes the stderr pipe, so the drain goroutine has to finish first.
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		for scanner.Scan() {}
+		defer wg.Done()
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+		}
 	}()
+	wg.Wait()
 
 	if err := cmd.Wait(); err != nil {
 		return nil, fmt.Errorf("failed to get channel videos: %w", err)
 	}
+
+	var videos []VideoInfo
 
 	lines := strings.Split(stdout.String(), "\n")
 	for _, line := range lines {
@@ -338,13 +280,10 @@ func (d *Downloader) GetChannelVideos(ctx context.Context, channelURL string, li
 }
 
 func (d *Downloader) GetVideoPublishDate(ctx context.Context, videoURL string) time.Time {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	args := []string{
 		"--print", "%(upload_date)s",
 		"--skip-download",
-		videoURL,
+		"--", videoURL,
 	}
 
 	cmd := exec.CommandContext(ctx, d.binaryPath, args...)

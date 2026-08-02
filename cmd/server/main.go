@@ -26,12 +26,18 @@ func main() {
 	}
 	defer database.Close()
 
-	dl := downloader.New(cfg.YTDL.BinaryPath, cfg.YTDL.OutputDir)
+	dl := downloader.New(cfg.YTDL.BinaryPath, cfg.YTDL.OutputDir, cfg.YTDL.MaxConcurrent)
 
 	agt := agent.New(database, dl)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	if n, err := agt.ResumeInterrupted(ctx); err != nil {
+		log.Printf("Failed to resume interrupted downloads: %v", err)
+	} else if n > 0 {
+		log.Printf("Resumed %d interrupted download(s)", n)
+	}
 
 	if cfg.Telegram.BotToken != "" {
 		tg, err := telegram.New(cfg.Telegram.BotToken, agt)
@@ -63,7 +69,7 @@ func main() {
 		}
 	}
 
-	apiServer := api.NewServer(":"+cfg.Server.Port, database, dl, agt, cfg.WebDir)
+	apiServer := api.NewServer(":"+cfg.Server.Port, database, dl, agt, cfg.WebDir, cfg.Server.APIToken)
 	go func() {
 		if err := apiServer.Start(); err != nil {
 			log.Printf("API server error: %v", err)

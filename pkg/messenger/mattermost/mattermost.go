@@ -104,7 +104,7 @@ func (m *Messenger) sendFile(messengerID string, chatID int64, filePath string) 
 		return err
 	}
 
- channelId := fmt.Sprintf("%d", chatID)
+	channelId := fmt.Sprintf("%d", chatID)
 	req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v4/files/upload?channel_id=%s", m.url, channelId), nil)
 	if err != nil {
 		return err

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -20,10 +21,11 @@ type Server struct {
 	db         *db.DB
 	downloader *downloader.Downloader
 	agent      *agent.Agent
+	apiToken   string
 }
 
 type DownloadRequest struct {
-	URL      string `json:"url"`
+	URL       string `json:"url"`
 	OutputDir string `json:"output_dir,omitempty"`
 }
 
@@ -38,11 +40,12 @@ type Response struct {
 	Error   string      `json:"error,omitempty"`
 }
 
-func NewServer(addr string, database *db.DB, dl *downloader.Downloader, agt *agent.Agent, webDir string) *Server {
+func NewServer(addr string, database *db.DB, dl *downloader.Downloader, agt *agent.Agent, webDir, apiToken string) *Server {
 	s := &Server{
 		db:         database,
 		downloader: dl,
 		agent:      agt,
+		apiToken:   apiToken,
 	}
 
 	mux := http.NewServeMux()
@@ -62,14 +65,48 @@ func NewServer(addr string, database *db.DB, dl *downloader.Downloader, agt *age
 
 	s.server = &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: s.withAuth(mux),
 	}
 
 	return s
 }
 
+// withAuth gates the /api routes behind API_TOKEN. Static files stay open so
+// the UI can load and ask for the token; /api/health stays open for probes.
+func (s *Server) withAuth(next http.Handler) http.Handler {
+	if s.apiToken == "" {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api/health" || s.tokenValid(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		s.respondError(w, "Unauthorized", http.StatusUnauthorized)
+	})
+}
+
+func (s *Server) tokenValid(r *http.Request) bool {
+	token := r.Header.Get("X-API-Token")
+	if token == "" {
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
+		}
+	}
+	if token == "" {
+		// Plain <a href> downloads cannot set headers.
+		token = r.URL.Query().Get("token")
+	}
+
+	return subtle.ConstantTimeCompare([]byte(token), []byte(s.apiToken)) == 1
+}
+
 func (s *Server) Start() error {
 	log.Printf("API server starting on %s", s.server.Addr)
+	if s.apiToken == "" {
+		log.Printf("WARNING: API_TOKEN is not set, the API is open to anyone who can reach this port")
+	}
 	return s.server.ListenAndServe()
 }
 
@@ -218,7 +255,7 @@ func (s *Server) retryDownload(w http.ResponseWriter, r *http.Request, id string
 	}
 
 	_ = s.db.UpdateDownloadStatus(d.ID, "pending")
-	go s.agent.ProcessDownload(context.Background(), d)
+	s.agent.ProcessDownload(context.Background(), d)
 
 	s.respond(w, Response{Success: true, Data: d})
 }
@@ -276,14 +313,15 @@ func (s *Server) cancelDownload(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 
-	cancelled := s.agent.CancelDownload(downloadID)
-	_ = s.db.UpdateDownloadError(downloadID, "cancelled", "")
-
-	msg := "Download cancelled"
-	if !cancelled {
-		msg = "Download was not active"
+	// Only touch the status when we actually stopped something — otherwise a
+	// stray cancel would overwrite an already completed or failed download.
+	if !s.agent.CancelDownload(downloadID) {
+		s.respond(w, Response{Success: true, Data: "Download was not active"})
+		return
 	}
-	s.respond(w, Response{Success: true, Data: msg})
+
+	_ = s.db.UpdateDownloadError(downloadID, "cancelled", "")
+	s.respond(w, Response{Success: true, Data: "Download cancelled"})
 }
 
 func (s *Server) subscriptionsHandler(w http.ResponseWriter, r *http.Request) {
@@ -492,8 +530,8 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t := &db.Task{
-		Title:    req.Title,
-		Status:   "open",
+		Title:  req.Title,
+		Status: "open",
 	}
 
 	if err := s.db.CreateTask(t); err != nil {

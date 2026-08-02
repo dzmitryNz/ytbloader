@@ -134,9 +134,41 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 </div>
 <script>
 const API = '/api';
+const TOKEN_KEY = 'ytbloader_token';
 let timer;
 let activeTab = 'downloads';
 let videoUrls = {};
+
+// The API is only guarded when API_TOKEN is set on the server; until we get a
+// 401 back nothing here asks the user for anything.
+function apiToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
+
+function withToken(url) {
+  var t = apiToken();
+  if (!t) return url;
+  return url + (url.indexOf('?') === -1 ? '?' : '&') + 'token=' + encodeURIComponent(t);
+}
+
+let promptingToken = false;
+function promptToken() {
+  if (promptingToken) return;
+  promptingToken = true;
+  var t = prompt('API token required:', apiToken());
+  if (t) { localStorage.setItem(TOKEN_KEY, t); location.reload(); }
+  else { promptingToken = false; }
+}
+
+const rawFetch = window.fetch.bind(window);
+window.fetch = async function(input, init) {
+  init = init || {};
+  if (typeof input === 'string' && input.indexOf(API) === 0) {
+    var t = apiToken();
+    if (t) init.headers = Object.assign({}, init.headers || {}, {'X-API-Token': t});
+  }
+  const res = await rawFetch(input, init);
+  if (res.status === 401) promptToken();
+  return res;
+};
 
 function switchTab(tab, btn) {
   activeTab = tab;
@@ -189,7 +221,7 @@ function render(items) {
     const isActive = d.Status === 'pending' || d.Status === 'downloading';
     const title = d.Title || d.URL;
     let actions = '';
-    if (d.Status === 'completed' && d.OutputPath) actions += '<a href="' + API + '/downloads/' + d.ID + '/file">Save</a>';
+    if (d.Status === 'completed' && d.OutputPath) actions += '<a href="' + withToken(API + '/downloads/' + d.ID + '/file') + '">Save</a>';
     if (isActive) actions += '<button class="btn-cancel" onclick="cancelDownload(' + d.ID + ')">Cancel</button>';
     if (d.Status === 'failed' || d.Status === 'cancelled') actions += '<button class="btn-restart" onclick="restartDownload(' + d.ID + ')">Restart</button>';
     actions += '<button class="btn-delete" onclick="deleteDownload(' + d.ID + ')">Delete</button>';
