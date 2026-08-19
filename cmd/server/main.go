@@ -26,7 +26,12 @@ func main() {
 	}
 	defer database.Close()
 
-	dl := downloader.New(cfg.YTDL.BinaryPath, cfg.YTDL.OutputDir, cfg.YTDL.MaxConcurrent)
+	dl := downloader.New(cfg.YTDL.BinaryPath, cfg.YTDL.OutputDir, cfg.YTDL.MaxConcurrent, downloader.Options{
+		JSRuntime:        cfg.YTDL.JSRuntime,
+		RemoteComponents: cfg.YTDL.RemoteComponents,
+		POTScript:        cfg.YTDL.POTScript,
+		PlayerClient:     cfg.YTDL.PlayerClient,
+	})
 
 	agt := agent.New(database, dl)
 

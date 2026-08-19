@@ -42,6 +42,13 @@ type YTDLConfig struct {
 	BinaryPath    string
 	OutputDir     string
 	MaxConcurrent int
+	// YouTube now rejects plain media requests with 403, so yt-dlp needs a JS
+	// runtime for the player challenges, the EJS solver, a PO token provider
+	// and a client whose formats are still served over plain HTTPS.
+	JSRuntime        string
+	RemoteComponents string
+	POTScript        string
+	PlayerClient     string
 }
 
 func Load() *Config {
@@ -64,9 +71,13 @@ func Load() *Config {
 			BotToken: getEnv("MATTERMOST_BOT_TOKEN", ""),
 		},
 		YTDL: YTDLConfig{
-			BinaryPath:    getEnv("YTDLP_PATH", "yt-dlp"),
-			OutputDir:     getEnv("YTDLP_OUTPUT_DIR", "./downloads"),
-			MaxConcurrent: getEnvInt("YTDLP_MAX_CONCURRENT", 2),
+			BinaryPath:       getEnv("YTDLP_PATH", "yt-dlp"),
+			OutputDir:        getEnv("YTDLP_OUTPUT_DIR", "./downloads"),
+			MaxConcurrent:    getEnvInt("YTDLP_MAX_CONCURRENT", 2),
+			JSRuntime:        getEnv("YTDLP_JS_RUNTIME", ""),
+			RemoteComponents: getEnv("YTDLP_REMOTE_COMPONENTS", "ejs:github"),
+			POTScript:        getEnv("YTDLP_POT_SCRIPT", ""),
+			PlayerClient:     getEnv("YTDLP_PLAYER_CLIENT", "web_embedded"),
 		},
 		WebDir: getEnv("WEB_DIR", "web"),
 	}

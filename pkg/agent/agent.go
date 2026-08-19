@@ -183,7 +183,9 @@ func (a *Agent) processDownload(ctx context.Context, d *db.Download) {
 			_ = a.db.UpdateDownloadStatus(d.ID, "downloading")
 		},
 		OnProgress: func(pct int) {
-			if pct == lastPct || time.Since(lastWrite) < progressWriteInterval {
+			// The closing 100 is the one update worth writing unconditionally;
+			// rate-limiting it away leaves finished rows stuck just short.
+			if pct == lastPct || (pct < 100 && time.Since(lastWrite) < progressWriteInterval) {
 				return
 			}
 			lastPct = pct
