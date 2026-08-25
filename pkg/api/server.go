@@ -382,22 +382,24 @@ func (s *Server) channelVideosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.respond(w, Response{Success: true, Data: s.withDownloadedFlags(videos)})
+}
+
+type VideoResponse struct {
+	db.Video
+	IsDownloaded bool `json:"IsDownloaded"`
+}
+
+func (s *Server) withDownloadedFlags(videos []db.Video) []VideoResponse {
 	downloadedURLs, _ := s.db.GetDownloadedVideoURLs()
-
-	type VideoResponse struct {
-		db.Video
-		IsDownloaded bool `json:"IsDownloaded"`
-	}
-
-	var response []VideoResponse
+	response := make([]VideoResponse, 0, len(videos))
 	for _, v := range videos {
 		response = append(response, VideoResponse{
 			Video:        v,
 			IsDownloaded: downloadedURLs[v.URL],
 		})
 	}
-
-	s.respond(w, Response{Success: true, Data: response})
+	return response
 }
 
 func (s *Server) listSubscriptions(w http.ResponseWriter, r *http.Request) {
@@ -484,6 +486,10 @@ func (s *Server) refreshSubscription(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
+	// Sink the previous batch first, otherwise videos that fell out of the
+	// fetched window keep stale positions 1..n and interleave with fresh ones.
+	_ = s.db.ShiftVideoPositions(channelID, len(videos))
+
 	for i, v := range videos {
 		video := &db.Video{
 			ChannelID: channelID,
@@ -496,13 +502,21 @@ func (s *Server) refreshSubscription(w http.ResponseWriter, r *http.Request, id 
 	}
 
 	dbVideos, _ := s.db.GetVideosByChannel(channelID, 50)
-	fetched := 0
+	// Only successful lookups count against the limit, so one video with an
+	// unavailable date cannot starve the rest forever. Attempts are capped
+	// separately to keep a refresh from stalling on a broken channel.
+	const dateFetchLimit = 10
+	fetched, attempts := 0, 0
 	for _, v := range dbVideos {
-		if v.Published.IsZero() && fetched < 10 {
-			pubDate := s.downloader.GetVideoPublishDate(r.Context(), v.URL)
-			if !pubDate.IsZero() {
-				s.db.UpdateVideoPublished(v.ID, pubDate)
-			}
+		if fetched >= dateFetchLimit || attempts >= dateFetchLimit*2 {
+			break
+		}
+		if !v.Published.IsZero() {
+			continue
+		}
+		attempts++
+		if pubDate := s.downloader.GetVideoPublishDate(r.Context(), v.URL); !pubDate.IsZero() {
+			s.db.UpdateVideoPublished(v.ID, pubDate)
 			fetched++
 		}
 	}
@@ -512,8 +526,12 @@ func (s *Server) refreshSubscription(w http.ResponseWriter, r *http.Request, id 
 	newCount, _ := s.db.CountNewVideosSince(channelID, oldLastCheck)
 	_ = s.db.UpdateChannelNewVideosCount(channelID, newCount)
 
+	// Re-read so the response carries the dates filled in above, plus the
+	// downloaded flags the video list renderer expects.
+	dbVideos, _ = s.db.GetVideosByChannel(channelID, 50)
+
 	s.respond(w, Response{Success: true, Data: map[string]interface{}{
-		"videos":   dbVideos,
+		"videos":   s.withDownloadedFlags(dbVideos),
 		"newCount": newCount,
 	}})
 }

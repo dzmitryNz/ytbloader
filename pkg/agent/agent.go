@@ -203,6 +203,9 @@ func (a *Agent) processDownload(ctx context.Context, d *db.Download) {
 	}
 
 	_ = a.db.UpdateDownloadResult(d.ID, result.Title, result.OutputPath, "completed", result.Size)
+	// Persist the mark separately: deleting the row from the downloads history
+	// must not erase the "already downloaded" checkmark on subscription videos.
+	_ = a.db.MarkVideoDownloaded(d.URL)
 
 	d.OutputPath = result.OutputPath
 	d.Title = result.Title

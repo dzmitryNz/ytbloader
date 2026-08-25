@@ -408,6 +408,17 @@ func (db *DB) UpdateChannelLastCheck(id int64) error {
 	return err
 }
 
+// ShiftVideoPositions pushes every video of a channel down the list before a
+// refresh re-inserts the fresh batch at positions 1..n. Videos that fall out
+// of the fetched window keep sinking instead of clashing with new positions.
+func (db *DB) ShiftVideoPositions(channelID int64, offset int) error {
+	_, err := db.conn.Exec(
+		`UPDATE videos SET position = position + ? WHERE channel_id = ?`,
+		offset, channelID,
+	)
+	return err
+}
+
 func (db *DB) UpsertVideo(v *Video) error {
 	return db.conn.QueryRow(
 		`INSERT INTO videos (channel_id, url, title, duration, published, position)
@@ -486,8 +497,10 @@ func (db *DB) ListAllChannels() ([]Channel, error) {
 }
 
 func (db *DB) GetVideosByChannel(channelID int64, limit int) ([]Video, error) {
+	// id DESC breaks position ties left over from before positions were
+	// shifted on refresh: the newer row wins.
 	rows, err := db.conn.Query(
-		videoColumns+` FROM videos WHERE channel_id = ? ORDER BY position ASC LIMIT ?`,
+		videoColumns+` FROM videos WHERE channel_id = ? ORDER BY position ASC, id DESC LIMIT ?`,
 		channelID, limit,
 	)
 	if err != nil {

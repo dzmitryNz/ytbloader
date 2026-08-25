@@ -324,6 +324,12 @@ async function addSubscription() {
 
 async function loadSubs() {
   const el = document.getElementById('sub-list');
+  // Re-rendering replaces the whole list, so carry open video lists over
+  // instead of collapsing them.
+  var openVids = {};
+  el.querySelectorAll('.channel-videos.open').forEach(function(v) {
+    openVids[v.id] = v.innerHTML;
+  });
   try {
     const res = await fetch(API + '/subscriptions');
     const data = await res.json();
@@ -347,6 +353,10 @@ async function loadSubs() {
         '</div></div>' +
         '<div class="channel-videos" id="vids-' + c.ID + '"></div></div>';
     }).join('');
+    Object.keys(openVids).forEach(function(id) {
+      var v = document.getElementById(id);
+      if (v) { v.classList.add('open'); v.innerHTML = openVids[id]; }
+    });
   } catch(e) { el.innerHTML = '<div class="empty">Failed to load subscriptions</div>'; }
 }
 
@@ -358,19 +368,10 @@ async function refreshChannel(id) {
     const data = await res.json();
     if (statusEl) statusEl.textContent = '';
     if (data.success) {
-      var videos = data.data.videos || [];
-      var newCount = data.data.newCount || 0;
-      renderVideos(id, videos);
-      loadSubs();
-      if (newCount > 0) {
-        var el = document.getElementById('ch-' + id);
-        if (el) {
-          var nameEl = el.querySelector('.channel-name');
-          if (nameEl && !nameEl.querySelector('.new-badge')) {
-            nameEl.innerHTML += '<span class="new-badge">' + newCount + ' new</span>';
-          }
-        }
-      }
+      renderVideos(id, data.data.videos || []);
+      // loadSubs draws the new-badge and last-check from server data and
+      // keeps the freshly rendered video list open.
+      await loadSubs();
     }
   } catch(e) { if (statusEl) statusEl.textContent = ''; }
 }
@@ -397,7 +398,15 @@ function renderVideos(channelId, videos) {
   });
   el.innerHTML = videos.map(function(v, i) {
     var dur = v.Duration > 0 ? formatDuration(v.Duration) : '';
-    var date = v.Published && v.Published !== '0001-01-01T00:00:00Z' ? formatDate(v.Published) : '';
+    // Until the real publish date is fetched, fall back to when the video
+    // first appeared in the list; "~" marks it as approximate.
+    var date = '', dateTitle = '';
+    if (hasDate(v.Published)) {
+      date = formatDate(v.Published);
+    } else if (hasDate(v.CreatedAt)) {
+      date = '~' + formatDate(v.CreatedAt);
+      dateTitle = 'Added to the list on this date; publish date not fetched yet';
+    }
     var thumb = thumbUrl(v.URL);
     var downloaded = v.IsDownloaded ? '<span class="video-downloaded">&#10003;</span>' : '';
     var cls = v.IsDownloaded ? ' downloaded' : '';
@@ -407,7 +416,7 @@ function renderVideos(channelId, videos) {
     return '<div class="video-item' + cls + '">' +
       (thumb ? '<div class="video-thumb-wrap"><img class="video-thumb" src="' + esc(thumb) + '" loading="lazy"></div>' : '') +
       '<span class="video-title">' + esc(v.Title || v.URL) + downloaded + '</span>' +
-      (date ? '<span class="video-date">' + date + '</span>' : '') +
+      (date ? '<span class="video-date"' + (dateTitle ? ' title="' + dateTitle + '"' : '') + '>' + date + '</span>' : '') +
       (dur ? '<span class="video-duration">' + dur + '</span>' : '') +
       '<a class="' + markClass + '" href="#" title="' + markTitle + '" onclick="toggleVideoDownloaded(event,\'' + esc(v.URL) + '\',' + channelId + ')">' + markLabel + '</a>' +
       '<a class="video-dl" href="#" onclick="quickDownload(event,' + channelId + ',' + i + ')">DL</a>' +
@@ -479,15 +488,18 @@ async function refreshAllChannels() {
       var statusEl = document.getElementById('status-' + channels[i].ID);
       if (statusEl) statusEl.textContent = 'Refreshing...';
       try {
-        await fetch(API + '/subscriptions/' + channels[i].ID + '/refresh', {method:'POST'});
+        const res = await fetch(API + '/subscriptions/' + channels[i].ID + '/refresh', {method:'POST'});
+        const data = await res.json();
+        if (data.success) renderVideos(channels[i].ID, data.data.videos || []);
       } catch(e) {}
-      if (statusEl) statusEl.textContent = '';
+      // Redraw the card right away so this channel's badge, last-check and
+      // open video list update without waiting for the remaining channels.
+      await loadSubs();
     }
   } finally {
     label.textContent = '';
     btn.classList.remove('spinning');
     btn.disabled = false;
-    loadSubs();
   }
 }
 
@@ -503,6 +515,10 @@ function formatDuration(s) {
   var sec = s%60;
   if (h > 0) return h + ':' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
   return m + ':' + String(sec).padStart(2,'0');
+}
+
+function hasDate(s) {
+  return s && s !== '0001-01-01T00:00:00Z';
 }
 
 function formatDate(s) {
