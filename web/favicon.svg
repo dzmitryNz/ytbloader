@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="7" fill="#FF0000"/>
+  <!-- download arrow -->
+  <path fill="#fff" d="M15 6h2v10.2l3.6-3.6 1.4 1.4L16 20.4l-6-6 1.4-1.4 3.6 3.6V6z"/>
+  <path fill="#fff" d="M8 22h16v2.5H8z"/>
+</svg>
