@@ -267,6 +267,12 @@ func (s *Server) deleteDownload(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 
+	if d, err := s.db.GetDownload(downloadID); err == nil && d.OutputPath != "" {
+		if err := os.Remove(d.OutputPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Failed to remove file %s: %v", d.OutputPath, err)
+		}
+	}
+
 	if err := s.db.DeleteDownload(downloadID); err != nil {
 		s.respondError(w, "Failed to delete download", http.StatusInternalServerError)
 		return
