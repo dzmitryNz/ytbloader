@@ -16,6 +16,7 @@ type Config struct {
 }
 
 type ServerConfig struct {
+	Host string // empty = all interfaces
 	Port string
 	// APIToken guards the HTTP API. Empty means no authentication.
 	APIToken string
@@ -54,6 +55,7 @@ type YTDLConfig struct {
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
+			Host:     getEnv("SERVER_HOST", ""),
 			Port:     getEnv("SERVER_PORT", "8070"),
 			APIToken: getEnv("API_TOKEN", ""),
 		},
