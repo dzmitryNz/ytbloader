@@ -62,6 +62,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 .channel-actions{display:flex;gap:6px;flex-shrink:0}
 .channel-actions a,.channel-actions button{padding:6px 12px;border:1px solid #444;border-radius:4px;font-size:12px;text-decoration:none;cursor:pointer;background:#2a2a3e;color:#aaa}
 .channel-actions a:hover,.channel-actions button:hover{background:#3a3a4e;color:#fff}
+.channel-actions .btn-checkall{width:30px;padding:6px 0;text-align:center;flex:none}
 .channel-status{font-size:12px;color:#667eea;white-space:nowrap;flex-shrink:0}
 .channel-videos{margin-top:12px;border-top:1px solid #333;padding-top:12px;display:none}
 .channel-videos.open{display:block}
@@ -350,6 +351,7 @@ async function loadSubs() {
         '</div><div class="channel-actions">' +
         '<span class="channel-status" id="status-' + c.ID + '"></span>' +
         '<button class="btn-refresh" onclick="refreshChannel(' + c.ID + ')">Refresh</button>' +
+        '<button class="btn-checkall" title="Mark all videos downloaded" onclick="checkAllVideos(' + c.ID + ')">&#10003;</button>' +
         '<button class="btn-toggle" onclick="toggleVideos(' + c.ID + ')">Videos</button>' +
         '</div></div>' +
         '<div class="channel-videos" id="vids-' + c.ID + '"></div></div>';
@@ -454,6 +456,25 @@ async function toggleVideoDownloaded(e, url, channelId) {
     var data = await res.json();
     if (data.success) renderVideos(channelId, data.data || []);
   } catch(err) {}
+}
+
+async function checkAllVideos(id) {
+  var statusEl = document.getElementById('status-' + id);
+  if (statusEl) statusEl.textContent = 'Marking...';
+  try {
+    const res = await fetch(API + '/channels/' + id);
+    const data = await res.json();
+    const pending = (data.success ? (data.data || []) : []).filter(v => !v.IsDownloaded);
+    await Promise.all(pending.map(v => fetch(API + '/video-downloads', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({url: v.URL})
+    })));
+    var el = document.getElementById('vids-' + id);
+    if (el) { el.classList.remove('open'); el.innerHTML = ''; }
+    await loadSubs();
+  } catch(e) {}
+  if (statusEl) statusEl.textContent = '';
 }
 
 async function deleteSubscription(id) {
