@@ -441,3 +441,12 @@ curl http://localhost:8080/api/tasks/1
 - **net/http** - REST API
 - **go-telegram-bot-api** - Telegram
 - **HTTP API** - Discord и Mattermost
+
+## Improvement proposals
+
+- [ ] Add GitHub Actions: `go vet`, `go test`, `golangci-lint`; bump `go 1.19` in `go.mod`.
+- [ ] Add tests for the downloader (argument building, stubbed yt-dlp) and `db`.
+- [ ] Refuse to start with an empty `API_TOKEN` when `SERVER_HOST` is not loopback.
+- [ ] Pass `API_TOKEN`, `SERVER_HOST` and `YTDLP_*` variables in `docker-compose.yml`.
+- [ ] Pin or auto-update yt-dlp; retry failed downloads with backoff.
+- [ ] Auto-download new videos from subscriptions; clean old files or limit disk space in `downloads/`.
