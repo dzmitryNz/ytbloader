@@ -450,3 +450,5 @@ curl http://localhost:8080/api/tasks/1
 - [ ] Pass `API_TOKEN`, `SERVER_HOST` and `YTDLP_*` variables in `docker-compose.yml`.
 - [ ] Pin or auto-update yt-dlp; retry failed downloads with backoff.
 - [ ] Auto-download new videos from subscriptions; clean old files or limit disk space in `downloads/`.
+- [ ] Discord does not receive messages: `Start()` in `pkg/messenger/discord/discord.go` is an empty loop. Connect to the Discord gateway with [discordgo](https://github.com/bwmarrin/discordgo) and pass messages to the agent.
+- [ ] Replace `go-telegram-bot-api` (no commits since 2024-08) with [go-telegram/bot](https://github.com/go-telegram/bot): actively maintained, no dependencies, built-in inline keyboards and paginator for the subscriptions list. [telego](https://github.com/mymmrac/telego) is the alternative if only a current Bot API client is needed.
