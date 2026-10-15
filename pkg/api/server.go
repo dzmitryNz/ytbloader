@@ -464,6 +464,7 @@ func (s *Server) deleteSubscription(w http.ResponseWriter, r *http.Request, id s
 	}
 
 	if err := s.db.DeleteChannel(channelID); err != nil {
+		log.Printf("delete subscription %d: %v", channelID, err)
 		s.respondError(w, "Failed to delete subscription", http.StatusInternalServerError)
 		return
 	}

@@ -396,9 +396,23 @@ func (db *DB) ListChannels(messengerID string, userID int64) ([]Channel, error) 
 	return channels, nil
 }
 
+// DeleteChannel removes the channel together with its videos: videos.channel_id
+// has no ON DELETE CASCADE and foreign keys are on, so the channel row alone
+// cannot be deleted while videos point at it.
 func (db *DB) DeleteChannel(id int64) error {
-	_, err := db.conn.Exec(`DELETE FROM channels WHERE id = ?`, id)
-	return err
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM videos WHERE channel_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM channels WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (db *DB) UpdateChannelLastCheck(id int64) error {

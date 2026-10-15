@@ -481,7 +481,11 @@ async function deleteSubscription(id) {
   var name = channelNames[id] || 'this channel';
   var ok = await confirmModal('Unsubscribe from "' + name + '"?', 'Unsubscribe');
   if (!ok) return;
-  await fetch(API + '/subscriptions/' + id, {method:'DELETE'});
+  try {
+    const res = await fetch(API + '/subscriptions/' + id, {method:'DELETE'});
+    const data = await res.json();
+    if (!data.success) alert(data.error || 'Failed to unsubscribe');
+  } catch(e) { alert('Error: ' + e.message); }
   loadSubs();
 }
 
