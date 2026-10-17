@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -401,5 +403,81 @@ func TestHandleNewVideosWithoutResultsKeepsItsText(t *testing.T) {
 	}
 	if resp.Text != "No new videos found" {
 		t.Errorf("text = %q", resp.Text)
+	}
+}
+
+func TestSubsPaginatesTenPerPage(t *testing.T) {
+	a, database := newTestAgent(t, &fakeDownloader{})
+	for i := 0; i < 12; i++ {
+		addChannel(t, database, fmt.Sprintf("ch%02d", i), fmt.Sprintf("Channel%02d", i))
+	}
+
+	resp, err := a.ProcessMessage(context.Background(), "web", 1, 1, "/subs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(resp.Text, "Channel"); n != 10 {
+		t.Errorf("page 1 lists %d channels, want 10", n)
+	}
+	if resp.Pager == nil || *resp.Pager != (Pager{Kind: "subs", Page: 1, TotalPages: 2}) {
+		t.Errorf("pager = %+v, want subs page 1/2", resp.Pager)
+	}
+
+	resp, err = a.ProcessMessage(context.Background(), "web", 1, 1, "/subs 2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(resp.Text, "Channel"); n != 2 {
+		t.Errorf("page 2 lists %d channels, want 2", n)
+	}
+	if resp.Pager == nil || resp.Pager.Page != 2 || resp.Pager.TotalPages != 2 {
+		t.Errorf("pager = %+v, want page 2/2", resp.Pager)
+	}
+}
+
+func TestSubsWithOnePageHasNoPager(t *testing.T) {
+	a, database := newTestAgent(t, &fakeDownloader{})
+	addChannel(t, database, "chA", "A")
+
+	resp, err := a.ProcessMessage(context.Background(), "web", 1, 1, "/subs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Pager != nil {
+		t.Errorf("pager = %+v, want nil for a single page", resp.Pager)
+	}
+}
+
+func TestSubsPageOutOfRangeIsClamped(t *testing.T) {
+	a, database := newTestAgent(t, &fakeDownloader{})
+	for i := 0; i < 12; i++ {
+		addChannel(t, database, fmt.Sprintf("ch%02d", i), fmt.Sprintf("Channel%02d", i))
+	}
+
+	resp, err := a.ProcessMessage(context.Background(), "web", 1, 1, "/subs 99")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Pager == nil || resp.Pager.Page != 2 {
+		t.Errorf("pager = %+v, want the last page (2)", resp.Pager)
+	}
+}
+
+func TestVideosReturnsPagerForChannel(t *testing.T) {
+	var infos []downloader.VideoInfo
+	for i := 0; i < 12; i++ {
+		infos = append(infos, downloader.VideoInfo{URL: fmt.Sprintf("v%02d", i), Title: fmt.Sprintf("Video%02d", i)})
+	}
+	fake := &fakeDownloader{videos: map[string][]downloader.VideoInfo{"chA": infos}}
+	a, database := newTestAgent(t, fake)
+	ch := addChannel(t, database, "chA", "A")
+
+	resp, err := a.ProcessMessage(context.Background(), "web", 1, 1, fmt.Sprintf("/videos %d", ch.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Pager{Kind: "videos", ChannelID: ch.ID, Page: 1, TotalPages: 2}
+	if resp.Pager == nil || *resp.Pager != want {
+		t.Errorf("pager = %+v, want %+v", resp.Pager, want)
 	}
 }

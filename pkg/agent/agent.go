@@ -40,6 +40,18 @@ type Response struct {
 	Text     string
 	HasFile  bool
 	FilePath string
+	// Pager is set when the text is one page of a longer list; messengers
+	// that support buttons use it to offer Prev/Next.
+	Pager *Pager
+}
+
+// Pager describes the page a list response shows. ChannelID is set for
+// Kind "videos" only.
+type Pager struct {
+	Kind       string
+	ChannelID  int64
+	Page       int
+	TotalPages int
 }
 
 const videosPerPage = 10
@@ -83,7 +95,7 @@ func (a *Agent) ProcessMessage(ctx context.Context, messengerID string, userID i
 	case "/sub":
 		return a.handleSubscribe(ctx, messengerID, userID, chatID, parts[1:])
 	case "/subs":
-		return a.handleListSubs(messengerID, userID)
+		return a.handleListSubs(messengerID, userID, parts[1:])
 	case "/unsub":
 		return a.handleUnsub(parts[1:])
 	case "/videos":
@@ -325,7 +337,7 @@ func (a *Agent) handleSubscribe(ctx context.Context, messengerID string, userID 
 	return &Response{Text: fmt.Sprintf("Subscribed to: %s\nID: %d\nUse /videos %d to see videos", info.Name, channel.ID, channel.ID)}, nil
 }
 
-func (a *Agent) handleListSubs(messengerID string, userID int64) (*Response, error) {
+func (a *Agent) handleListSubs(messengerID string, userID int64, args []string) (*Response, error) {
 	channels, err := a.db.ListChannels(messengerID, userID)
 	if err != nil {
 		return &Response{Text: fmt.Sprintf("Failed to list subscriptions: %v", err)}, nil
@@ -335,14 +347,36 @@ func (a *Agent) handleListSubs(messengerID string, userID int64) (*Response, err
 		return &Response{Text: "No subscriptions yet.\nUse /sub <channel_url> to subscribe"}, nil
 	}
 
+	page := 1
+	if len(args) > 0 {
+		fmt.Sscanf(args[0], "%d", &page)
+	}
+	totalPages := (len(channels) + videosPerPage - 1) / videosPerPage
+	if page > totalPages {
+		page = totalPages
+	}
+	if page < 1 {
+		page = 1
+	}
+	start := (page - 1) * videosPerPage
+	end := min(start+videosPerPage, len(channels))
+
 	var sb strings.Builder
-	sb.WriteString("Your subscriptions:\n\n")
-	for _, c := range channels {
+	if totalPages > 1 {
+		fmt.Fprintf(&sb, "Your subscriptions (page %d/%d):\n\n", page, totalPages)
+	} else {
+		sb.WriteString("Your subscriptions:\n\n")
+	}
+	for _, c := range channels[start:end] {
 		fmt.Fprintf(&sb, "  %d. %s\n     %s\n", c.ID, c.Name, c.URL)
 	}
 	sb.WriteString("\nUse /videos <id> to see videos\nUse /new to see new videos")
 
-	return &Response{Text: sb.String()}, nil
+	resp := &Response{Text: sb.String()}
+	if totalPages > 1 {
+		resp.Pager = &Pager{Kind: "subs", Page: page, TotalPages: totalPages}
+	}
+	return resp, nil
 }
 
 func (a *Agent) handleUnsub(args []string) (*Response, error) {
@@ -433,7 +467,11 @@ func (a *Agent) handleVideos(ctx context.Context, args []string) (*Response, err
 		fmt.Fprintf(&sb, "\n/page %d - next page", page+1)
 	}
 
-	return &Response{Text: sb.String()}, nil
+	resp := &Response{Text: sb.String()}
+	if totalPages > 1 {
+		resp.Pager = &Pager{Kind: "videos", ChannelID: channelID, Page: page, TotalPages: totalPages}
+	}
+	return resp, nil
 }
 
 // refreshChannel stores the channel's latest videos and returns those added
@@ -672,7 +710,7 @@ func (a *Agent) handleHelp() *Response {
   --send, -s  Send MP3 file back to chat
 
 /sub <channel_url> - Subscribe to a channel
-/subs - List your subscriptions
+/subs [page] - List your subscriptions
 /unsub <id> - Unsubscribe from a channel
 /videos <id> [page] - List videos in a channel
 /new [page] - List new videos from subscriptions
