@@ -49,7 +49,7 @@ ytbloader/
 │   ├── agent/agent.go            # Парсер команд агента
 │   ├── api/server.go             # REST API (net/http)
 │   └── messenger/
-│       ├── telegram/telegram.go  # Telegram Bot API (go-telegram-bot-api)
+│       ├── telegram/telegram.go  # Telegram Bot API (go-telegram/bot)
 │       ├── discord/discord.go    # Discord Bot (HTTP API)
 │       └── mattermost/mattermost.go  # Mattermost Bot (HTTP API)
 ├── .env.example
@@ -431,9 +431,9 @@ POST /api/videos/:id/download
 | Команда | Описание | Пример |
 |---------|----------|--------|
 | `/sub <url>` | Подписаться на канал | `/sub https://www.youtube.com/@channel` |
-| `/subs` | Список подписок | `/subs` |
+| `/subs [page]` | Список подписок (в Telegram кнопки Prev/Next) | `/subs 2` |
 | `/unsub <id>` | Отписаться от канала | `/unsub 1` |
-| `/videos <id> [page]` | Список видео канала (пагинация) | `/videos 1 2` |
+| `/videos <id> [page]` | Список видео канала (пагинация, в Telegram кнопки Prev/Next) | `/videos 1 2` |
 | `/new [page]` | Новые видео из подписок | `/new` |
 
 ### Задачи
@@ -512,11 +512,10 @@ curl http://localhost:8070/api/tasks/1
 - **SQLite** - база данных (go-sqlite3)
 - **yt-dlp** - скачивание YouTube
 - **net/http** - REST API
-- **go-telegram-bot-api** - Telegram
+- **go-telegram/bot** - Telegram
 - **HTTP API** - Discord и Mattermost
 
 ## Improvement proposals
 
 - [ ] Auto-download new videos from subscriptions; clean old files or limit disk space in `downloads/`.
 - [ ] Discord does not receive messages: `Start()` in `pkg/messenger/discord/discord.go` is an empty loop. Connect to the Discord gateway with [discordgo](https://github.com/bwmarrin/discordgo) and pass messages to the agent.
-- [ ] Replace `go-telegram-bot-api` (no commits since 2024-08) with [go-telegram/bot](https://github.com/go-telegram/bot): actively maintained, no dependencies, built-in inline keyboards and paginator for the subscriptions list. [telego](https://github.com/mymmrac/telego) is the alternative if only a current Bot API client is needed.
