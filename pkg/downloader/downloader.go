@@ -206,9 +206,13 @@ func (d *Downloader) Download(ctx context.Context, req *DownloadRequest) (*Downl
 		}()
 	}
 
-	waitErr := cmd.Wait()
+	// Wait closes the pipes, so the readers must drain them first.
 	wg.Wait()
+	waitErr := cmd.Wait()
 	if waitErr != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("failed to download: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("failed to download: %w%s", waitErr, errLog.suffix())
 	}
 
@@ -316,8 +320,8 @@ func (d *Downloader) transcode(ctx context.Context, srcPath, mp3Path string, onP
 		}()
 	}
 
-	err := ffCmd.Wait()
 	wg.Wait()
+	err := ffCmd.Wait()
 	if err != nil {
 		return err
 	}
