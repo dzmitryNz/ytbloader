@@ -24,6 +24,8 @@ type fakeDownloader struct {
 	videosErr  map[string]error
 	videoGate  chan struct{}
 	videoCalls map[string]int
+	// outputPath, when set, is what a successful Download reports.
+	outputPath string
 }
 
 func (f *fakeDownloader) Download(ctx context.Context, req *downloader.DownloadRequest) (*downloader.DownloadResult, error) {
@@ -41,7 +43,11 @@ func (f *fakeDownloader) Download(ctx context.Context, req *downloader.DownloadR
 	if err := f.results[call-1]; err != nil {
 		return nil, err
 	}
-	return &downloader.DownloadResult{OutputPath: "/tmp/song.mp3", Title: "song", Size: 7}, nil
+	path := "/tmp/song.mp3"
+	if f.outputPath != "" {
+		path = f.outputPath
+	}
+	return &downloader.DownloadResult{OutputPath: path, Title: "song", Size: 7}, nil
 }
 
 func (f *fakeDownloader) GetInfo(ctx context.Context, url string) (string, string, error) {
