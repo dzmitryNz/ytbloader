@@ -17,6 +17,11 @@ type fakeDownloader struct {
 	calls   int
 	results []error // one entry per call; nil means success
 	onCall  func(call int)
+
+	videos     map[string][]downloader.VideoInfo
+	videosErr  map[string]error
+	videoGate  chan struct{}
+	videoCalls map[string]int
 }
 
 func (f *fakeDownloader) Download(ctx context.Context, req *downloader.DownloadRequest) (*downloader.DownloadResult, error) {
@@ -46,7 +51,27 @@ func (f *fakeDownloader) GetChannelInfo(ctx context.Context, url string) (*downl
 }
 
 func (f *fakeDownloader) GetChannelVideos(ctx context.Context, channelURL string, limit int) ([]downloader.VideoInfo, error) {
-	return nil, nil
+	f.mu.Lock()
+	if f.videoCalls == nil {
+		f.videoCalls = make(map[string]int)
+	}
+	f.videoCalls[channelURL]++
+	gate := f.videoGate
+	f.mu.Unlock()
+
+	if gate != nil {
+		<-gate
+	}
+	if err := f.videosErr[channelURL]; err != nil {
+		return nil, err
+	}
+	return f.videos[channelURL], nil
+}
+
+func (f *fakeDownloader) channelCalls(url string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.videoCalls[url]
 }
 
 func newTestAgent(t *testing.T, fake *fakeDownloader) (*Agent, *db.DB) {
@@ -192,5 +217,189 @@ func TestIsTransient(t *testing.T) {
 	}
 	if isTransient(nil) {
 		t.Error("isTransient(nil) = true")
+	}
+}
+
+func addChannel(t *testing.T, database *db.DB, url, name string) *db.Channel {
+	t.Helper()
+	c := &db.Channel{URL: url, Name: name, MessengerID: "web", UserID: 1}
+	if err := database.CreateChannel(c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func videoURLs(t *testing.T, database *db.DB, channelID int64) []string {
+	t.Helper()
+	videos, err := database.GetVideosByChannel(channelID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	urls := make([]string, 0, len(videos))
+	for _, v := range videos {
+		urls = append(urls, v.URL)
+	}
+	return urls
+}
+
+func TestRefreshAllUpsertsEveryChannel(t *testing.T) {
+	fake := &fakeDownloader{videos: map[string][]downloader.VideoInfo{
+		"chA": {{URL: "a1", Title: "A1"}, {URL: "a2", Title: "A2"}},
+		"chB": {{URL: "b1", Title: "B1"}},
+	}}
+	a, database := newTestAgent(t, fake)
+	chA := addChannel(t, database, "chA", "A")
+	chB := addChannel(t, database, "chB", "B")
+
+	res := a.RefreshAll(context.Background(), 5*time.Second)
+
+	if res.Channels != 2 || len(res.Failed) != 0 || res.Running {
+		t.Errorf("result = %+v, want 2 channels, none failed, not running", res)
+	}
+	if got := videoURLs(t, database, chA.ID); len(got) != 2 {
+		t.Errorf("channel A videos = %v, want 2", got)
+	}
+	if got := videoURLs(t, database, chB.ID); len(got) != 1 {
+		t.Errorf("channel B videos = %v, want 1", got)
+	}
+}
+
+func TestRefreshAllReportsFailedChannelAndKeepsGoing(t *testing.T) {
+	fake := &fakeDownloader{
+		videos:    map[string][]downloader.VideoInfo{"chB": {{URL: "b1", Title: "B1"}}},
+		videosErr: map[string]error{"chA": errors.New("yt-dlp exploded")},
+	}
+	a, database := newTestAgent(t, fake)
+	addChannel(t, database, "chA", "A")
+	chB := addChannel(t, database, "chB", "B")
+
+	res := a.RefreshAll(context.Background(), 5*time.Second)
+
+	if len(res.Failed) != 1 || res.Failed[0] != "A" {
+		t.Errorf("Failed = %v, want [A]", res.Failed)
+	}
+	if got := videoURLs(t, database, chB.ID); len(got) != 1 {
+		t.Errorf("channel B videos = %v, want 1", got)
+	}
+}
+
+func TestRefreshAllKeepsRunningAfterCallerStopsWaiting(t *testing.T) {
+	gate := make(chan struct{})
+	fake := &fakeDownloader{
+		videos:    map[string][]downloader.VideoInfo{"chA": {{URL: "a1", Title: "A1"}}},
+		videoGate: gate,
+	}
+	a, database := newTestAgent(t, fake)
+	chA := addChannel(t, database, "chA", "A")
+
+	res := a.RefreshAll(context.Background(), 10*time.Millisecond)
+	if !res.Running {
+		t.Fatalf("result = %+v, want Running", res)
+	}
+	close(gate)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(videoURLs(t, database, chA.ID)) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the run was cancelled: no videos stored after the gate opened")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRefreshAllCallerContextDoesNotCancelTheRun(t *testing.T) {
+	gate := make(chan struct{})
+	fake := &fakeDownloader{
+		videos:    map[string][]downloader.VideoInfo{"chA": {{URL: "a1", Title: "A1"}}},
+		videoGate: gate,
+	}
+	a, database := newTestAgent(t, fake)
+	chA := addChannel(t, database, "chA", "A")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	res := a.RefreshAll(ctx, time.Minute)
+	if !res.Running {
+		t.Fatalf("result = %+v, want Running when the caller context ends", res)
+	}
+	close(gate)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(videoURLs(t, database, chA.ID)) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the run stopped with the caller context")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRefreshAllConcurrentCallsShareOneRun(t *testing.T) {
+	gate := make(chan struct{})
+	fake := &fakeDownloader{
+		videos: map[string][]downloader.VideoInfo{
+			"chA": {{URL: "a1", Title: "A1"}},
+			"chB": {{URL: "b1", Title: "B1"}},
+		},
+		videoGate: gate,
+	}
+	a, database := newTestAgent(t, fake)
+	addChannel(t, database, "chA", "A")
+	addChannel(t, database, "chB", "B")
+
+	results := make(chan RefreshResult, 2)
+	go func() { results <- a.RefreshAll(context.Background(), 5*time.Second) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for fake.channelCalls("chA")+fake.channelCalls("chB") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the first run never started")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	go func() { results <- a.RefreshAll(context.Background(), 5*time.Second) }()
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+
+	for i := 0; i < 2; i++ {
+		select {
+		case res := <-results:
+			if res.Running || res.Channels != 2 {
+				t.Errorf("result = %+v, want finished run over 2 channels", res)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a RefreshAll call did not return")
+		}
+	}
+	for _, url := range []string{"chA", "chB"} {
+		if n := fake.channelCalls(url); n != 1 {
+			t.Errorf("GetChannelVideos(%s) calls = %d, want 1", url, n)
+		}
+	}
+}
+
+func TestRefreshAllStartsNewRunAfterTheLastEnded(t *testing.T) {
+	fake := &fakeDownloader{videos: map[string][]downloader.VideoInfo{"chA": {{URL: "a1", Title: "A1"}}}}
+	a, database := newTestAgent(t, fake)
+	addChannel(t, database, "chA", "A")
+
+	a.RefreshAll(context.Background(), 5*time.Second)
+	a.RefreshAll(context.Background(), 5*time.Second)
+
+	if n := fake.channelCalls("chA"); n != 2 {
+		t.Errorf("GetChannelVideos calls = %d, want 2", n)
+	}
+}
+
+func TestHandleNewVideosWithoutResultsKeepsItsText(t *testing.T) {
+	fake := &fakeDownloader{videosErr: map[string]error{"chA": errors.New("boom")}}
+	a, database := newTestAgent(t, fake)
+	addChannel(t, database, "chA", "A")
+
+	resp, err := a.ProcessMessage(context.Background(), "web", 1, 1, "/new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "No new videos found" {
+		t.Errorf("text = %q", resp.Text)
 	}
 }
