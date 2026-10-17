@@ -63,7 +63,7 @@ ytbloader/
 
 ### Зависимости
 
-- Go 1.19+
+- Go 1.24+
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) (для скачивания YouTube)
 - ffmpeg (нужен yt-dlp для конвертации в MP3)
 
@@ -93,11 +93,22 @@ make run
 docker-compose up -d
 ```
 
+В контейнере API слушает все интерфейсы (`SERVER_HOST=0.0.0.0`), поэтому `API_TOKEN` обязателен: без него сервер не стартует. Переменные берутся из `.env` рядом с `docker-compose.yml`. Версия yt-dlp зафиксирована в `Dockerfile` (`YTDLP_VERSION`, `YTDLP_SHA256`); для обновления поменяйте оба значения.
+
+### Разработка
+
+Для перезапуска сервера при сохранении файлов используется [air](https://github.com/air-verse/air):
+
+```bash
+go install github.com/air-verse/air@latest
+make dev
+```
+
 ## Конфигурация (.env)
 
 | Переменная | Описание | По умолчанию |
 |------------|----------|--------------|
-| `SERVER_PORT` | Порт API сервера | `8080` |
+| `SERVER_PORT` | Порт API сервера | `8070` |
 | `DB_PATH` | Путь к SQLite файлу | `ytbloader.db` |
 | `TELEGRAM_BOT_TOKEN` | Токен Telegram бота | (пусто) |
 | `DISCORD_BOT_TOKEN` | Токен Discord бота | (пусто) |
@@ -106,11 +117,12 @@ docker-compose up -d
 | `YTDLP_PATH` | Путь к бинарнику yt-dlp | `yt-dlp` |
 | `YTDLP_OUTPUT_DIR` | Директория для MP3 файлов | `./downloads` |
 | `YTDLP_MAX_CONCURRENT` | Сколько загрузок выполняется одновременно | `2` |
-| `API_TOKEN` | Токен для HTTP API (пусто — без аутентификации) | — |
+| `API_TOKEN` | Токен для HTTP API. Пустой токен допустим только при `SERVER_HOST` = loopback, иначе сервер не стартует | — |
+| `SERVER_HOST` | Адрес, на котором слушает API (пусто — все интерфейсы) | (пусто) |
 
 ## REST API
 
-Базовый URL: `http://localhost:8080`
+Базовый URL: `http://localhost:8070`
 
 ### Health Check
 
@@ -414,23 +426,23 @@ Your tasks:
 
 ```bash
 # Health check
-curl http://localhost:8080/api/health
+curl http://localhost:8070/api/health
 
 # Скачать видео
-curl -X POST http://localhost:8080/api/downloads \
+curl -X POST http://localhost:8070/api/downloads \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}'
 
 # Получить статус скачивания
-curl http://localhost:8080/api/downloads/1
+curl http://localhost:8070/api/downloads/1
 
 # Создать задачу
-curl -X POST http://localhost:8080/api/tasks \
+curl -X POST http://localhost:8070/api/tasks \
   -H "Content-Type: application/json" \
   -d '{"title": "Новая задача"}'
 
 # Получить задачу
-curl http://localhost:8080/api/tasks/1
+curl http://localhost:8070/api/tasks/1
 ```
 
 ## Технологии
@@ -444,15 +456,6 @@ curl http://localhost:8080/api/tasks/1
 
 ## Improvement proposals
 
-- [ ] Add GitHub Actions: `go vet`, `go test`, `golangci-lint`; bump `go 1.19` in `go.mod`.
-- [ ] Add tests for the downloader (argument building, stubbed yt-dlp) and `db`.
-- [ ] Refuse to start with an empty `API_TOKEN` when `SERVER_HOST` is not loopback.
-- [ ] Pass `API_TOKEN`, `SERVER_HOST` and `YTDLP_*` variables in `docker-compose.yml`.
-- [ ] Pin or auto-update yt-dlp; retry failed downloads with backoff.
 - [ ] Auto-download new videos from subscriptions; clean old files or limit disk space in `downloads/`.
 - [ ] Discord does not receive messages: `Start()` in `pkg/messenger/discord/discord.go` is an empty loop. Connect to the Discord gateway with [discordgo](https://github.com/bwmarrin/discordgo) and pass messages to the agent.
 - [ ] Replace `go-telegram-bot-api` (no commits since 2024-08) with [go-telegram/bot](https://github.com/go-telegram/bot): actively maintained, no dependencies, built-in inline keyboards and paginator for the subscriptions list. [telego](https://github.com/mymmrac/telego) is the alternative if only a current Bot API client is needed.
-- [ ] Live reload in development with [air](https://github.com/air-verse/air): rebuild and restart the server on file save instead of manual `make run`; add `.air.toml` and a `make dev` target.
-- [ ] `.env` is never loaded: Quick start says `cp .env.example .env` + `make run`, but neither `pkg/config/config.go` nor the Makefile reads the file, so the bot starts without tokens (docker-compose works because it sets `environment:`). Load it with [godotenv](https://github.com/joho/godotenv) (`godotenv.Load()` in `main.go`) or `-include .env` + `export` in the Makefile.
-- [ ] README says the default `SERVER_PORT` is `8080` (config table, base URL, curl examples), but `pkg/config/config.go` uses `8070`. Align the docs with the code.
-- [ ] Replace manual `getEnv`/`getEnvInt` with [caarlos0/env](https://github.com/caarlos0/env) struct tags (`env:"SERVER_PORT" envDefault:"8070"`): invalid values return an error instead of silently falling back (`YTDLP_MAX_CONCURRENT=abc` now becomes `2`), and `required` covers the `API_TOKEN` check above.

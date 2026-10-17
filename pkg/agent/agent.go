@@ -13,12 +13,22 @@ import (
 
 type FileSender func(messengerID string, chatID int64, filePath string) error
 
+// Downloader is the part of *downloader.Downloader the agent depends on.
+type Downloader interface {
+	Download(ctx context.Context, req *downloader.DownloadRequest) (*downloader.DownloadResult, error)
+	GetInfo(ctx context.Context, url string) (string, string, error)
+	GetChannelInfo(ctx context.Context, url string) (*downloader.ChannelInfo, error)
+	GetChannelVideos(ctx context.Context, channelURL string, limit int) ([]downloader.VideoInfo, error)
+}
+
 type Agent struct {
 	db         *db.DB
-	downloader *downloader.Downloader
+	downloader Downloader
 	senders    map[string]FileSender
 	mu         sync.RWMutex
 	cancels    map[int64]context.CancelFunc
+	// retryDelays are the waits before each retry of a transiently failed download.
+	retryDelays []time.Duration
 }
 
 type Response struct {
@@ -32,12 +42,13 @@ const videosPerPage = 10
 // progressWriteInterval caps how often download progress is persisted.
 const progressWriteInterval = 3 * time.Second
 
-func New(database *db.DB, dl *downloader.Downloader) *Agent {
+func New(database *db.DB, dl Downloader) *Agent {
 	return &Agent{
-		db:         database,
-		downloader: dl,
-		senders:    make(map[string]FileSender),
-		cancels:    make(map[int64]context.CancelFunc),
+		db:          database,
+		downloader:  dl,
+		senders:     make(map[string]FileSender),
+		cancels:     make(map[int64]context.CancelFunc),
+		retryDelays: []time.Duration{5 * time.Second, 30 * time.Second, 2 * time.Minute},
 	}
 }
 
@@ -167,9 +178,25 @@ func (a *Agent) CancelDownload(id int64) bool {
 	return false
 }
 
-func (a *Agent) processDownload(ctx context.Context, d *db.Download) {
-	_ = a.db.UpdateDownloadStatus(d.ID, "pending")
+// downloadWithRetry retries transient failures after each of a.retryDelays.
+func (a *Agent) downloadWithRetry(ctx context.Context, d *db.Download) (*downloader.DownloadResult, error) {
+	for attempt := 0; ; attempt++ {
+		result, err := a.downloadOnce(ctx, d)
+		if err == nil || ctx.Err() != nil || attempt >= len(a.retryDelays) || !isTransient(err) {
+			return result, err
+		}
 
+		timer := time.NewTimer(a.retryDelays[attempt])
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (a *Agent) downloadOnce(ctx context.Context, d *db.Download) (*downloader.DownloadResult, error) {
 	// yt-dlp emits a progress line many times per second; OnProgress runs on a
 	// single goroutine, so plain variables are enough to rate-limit the writes.
 	var (
@@ -177,7 +204,7 @@ func (a *Agent) processDownload(ctx context.Context, d *db.Download) {
 		lastPct   int
 	)
 
-	result, err := a.downloader.Download(ctx, &downloader.DownloadRequest{
+	return a.downloader.Download(ctx, &downloader.DownloadRequest{
 		URL: d.URL,
 		OnStart: func() {
 			_ = a.db.UpdateDownloadStatus(d.ID, "downloading")
@@ -193,6 +220,44 @@ func (a *Agent) processDownload(ctx context.Context, d *db.Download) {
 			_ = a.db.UpdateDownloadProgress(d.ID, pct)
 		},
 	})
+}
+
+var (
+	permanentErrorMarkers = []string{
+		"video unavailable", "private video", "http error 403", "http error 404",
+		"http error 410", "sign in to confirm", "members-only", "copyright",
+	}
+	transientErrorMarkers = []string{
+		"http error 5", "connection reset", "connection refused", "timed out",
+		"timeout", "temporary failure", "network is unreachable", "remote end closed",
+		"incompleteread", "unexpected eof",
+	}
+)
+
+// isTransient reports whether a failed download is worth retrying: network
+// trouble and HTTP 5xx yes, content that yt-dlp cannot get no.
+func isTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, m := range permanentErrorMarkers {
+		if strings.Contains(msg, m) {
+			return false
+		}
+	}
+	for _, m := range transientErrorMarkers {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Agent) processDownload(ctx context.Context, d *db.Download) {
+	_ = a.db.UpdateDownloadStatus(d.ID, "pending")
+
+	result, err := a.downloadWithRetry(ctx, d)
 	if err != nil {
 		if ctx.Err() != nil {
 			_ = a.db.UpdateDownloadError(d.ID, "cancelled", "")
@@ -268,7 +333,7 @@ func (a *Agent) handleListSubs(messengerID string, userID int64) (*Response, err
 	var sb strings.Builder
 	sb.WriteString("Your subscriptions:\n\n")
 	for _, c := range channels {
-		sb.WriteString(fmt.Sprintf("  %d. %s\n     %s\n", c.ID, c.Name, c.URL))
+		fmt.Fprintf(&sb, "  %d. %s\n     %s\n", c.ID, c.Name, c.URL)
 	}
 	sb.WriteString("\nUse /videos <id> to see videos\nUse /new to see new videos")
 
@@ -351,16 +416,16 @@ func (a *Agent) handleVideos(ctx context.Context, args []string) (*Response, err
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Videos in %s (page %d/%d):\n\n", channel.Name, page, totalPages))
+	fmt.Fprintf(&sb, "Videos in %s (page %d/%d):\n\n", channel.Name, page, totalPages)
 
 	for i, v := range dbVideos {
 		num := offset + i + 1
 		duration := formatDuration(v.Duration)
-		sb.WriteString(fmt.Sprintf("  %d. %s [%s]\n     /dl %s --send\n", num, v.Title, duration, v.URL))
+		fmt.Fprintf(&sb, "  %d. %s [%s]\n     /dl %s --send\n", num, v.Title, duration, v.URL)
 	}
 
 	if page < totalPages {
-		sb.WriteString(fmt.Sprintf("\n/page %d - next page", page+1))
+		fmt.Fprintf(&sb, "\n/page %d - next page", page+1)
 	}
 
 	return &Response{Text: sb.String()}, nil
@@ -431,9 +496,9 @@ func (a *Agent) handleNewVideos(ctx context.Context, messengerID string, userID 
 	sb.WriteString("New videos:\n\n")
 
 	for _, entry := range allNewVideos {
-		sb.WriteString(fmt.Sprintf("  %s:\n", entry.ChannelName))
+		fmt.Fprintf(&sb, "  %s:\n", entry.ChannelName)
 		for _, v := range entry.Videos {
-			sb.WriteString(fmt.Sprintf("    - %s\n      /dl %s --send\n", v.Title, v.URL))
+			fmt.Fprintf(&sb, "    - %s\n      /dl %s --send\n", v.Title, v.URL)
 		}
 		sb.WriteString("\n")
 	}
@@ -477,7 +542,7 @@ func (a *Agent) handleListTasks(messengerID string, userID int64) (*Response, er
 		if t.Status == "done" {
 			status = "●"
 		}
-		sb.WriteString(fmt.Sprintf("%s %d. %s\n", status, t.ID, t.Title))
+		fmt.Fprintf(&sb, "%s %d. %s\n", status, t.ID, t.Title)
 	}
 
 	return &Response{Text: sb.String()}, nil

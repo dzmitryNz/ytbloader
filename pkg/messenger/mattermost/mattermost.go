@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/mitry/ytbloader/pkg/agent"
@@ -23,9 +24,10 @@ type Messenger struct {
 }
 
 type MattermostPost struct {
-	ChannelId string `json:"channel_id"`
-	Message   string `json:"message"`
-	RootId    string `json:"root_id,omitempty"`
+	ChannelId string   `json:"channel_id"`
+	Message   string   `json:"message"`
+	RootId    string   `json:"root_id,omitempty"`
+	FileIds   []string `json:"file_ids,omitempty"`
 }
 
 func New(url, token string, agent *agent.Agent) (*Messenger, error) {
@@ -55,11 +57,13 @@ func (m *Messenger) Start(ctx context.Context) error {
 }
 
 func (m *Messenger) SendPost(channelID, message string) error {
-	post := MattermostPost{
+	return m.createPost(MattermostPost{
 		ChannelId: channelID,
 		Message:   message,
-	}
+	})
+}
 
+func (m *Messenger) createPost(post MattermostPost) error {
 	jsonData, err := json.Marshal(post)
 	if err != nil {
 		return err
@@ -79,7 +83,7 @@ func (m *Messenger) SendPost(channelID, message string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to send post: %s", string(body))
 	}
@@ -94,8 +98,9 @@ func (m *Messenger) sendFile(messengerID string, chatID int64, filePath string) 
 	}
 	defer file.Close()
 
-	body := &multipart.Writer{}
-	payload, err := body.CreateFormFile("files", filePath)
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	payload, err := w.CreateFormFile("files", filepath.Base(filePath))
 	if err != nil {
 		return err
 	}
@@ -103,14 +108,17 @@ func (m *Messenger) sendFile(messengerID string, chatID int64, filePath string) 
 	if _, err := io.Copy(payload, file); err != nil {
 		return err
 	}
+	if err := w.Close(); err != nil {
+		return err
+	}
 
 	channelId := fmt.Sprintf("%d", chatID)
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v4/files/upload?channel_id=%s", m.url, channelId), nil)
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v4/files?channel_id=%s", m.url, channelId), &buf)
 	if err != nil {
 		return err
 	}
 
-	req.Header.Set("Content-Type", body.FormDataContentType())
+	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+m.token)
 
 	resp, err := m.client.Do(req)
@@ -119,12 +127,28 @@ func (m *Messenger) sendFile(messengerID string, chatID int64, filePath string) 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to upload file: %s", string(respBody))
 	}
 
-	return nil
+	var uploaded struct {
+		FileInfos []struct {
+			ID string `json:"id"`
+		} `json:"file_infos"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&uploaded); err != nil {
+		return fmt.Errorf("failed to decode upload response: %w", err)
+	}
+	if len(uploaded.FileInfos) == 0 {
+		return fmt.Errorf("upload response has no file ids")
+	}
+
+	post := MattermostPost{ChannelId: channelId}
+	for _, info := range uploaded.FileInfos {
+		post.FileIds = append(post.FileIds, info.ID)
+	}
+	return m.createPost(post)
 }
 
 func (m *Messenger) Stop() {

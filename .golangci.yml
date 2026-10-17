@@ -1,0 +1,22 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*os.File).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*encoding/json.Encoder).Encode
+        - os.Remove
+        - os.Setenv
+        - os.Unsetenv
+        - io.WriteString
+        - fmt.Sscanf
+        - (*github.com/mitry/ytbloader/pkg/db.DB).Close
+        - (*github.com/mitry/ytbloader/pkg/db.DB).UpsertVideo
+        - (*github.com/mitry/ytbloader/pkg/db.DB).UpdateVideoPublished
+        - (*github.com/mitry/ytbloader/pkg/messenger/discord.Messenger).Start
+        - (*github.com/mitry/ytbloader/pkg/messenger/mattermost.Messenger).Start
