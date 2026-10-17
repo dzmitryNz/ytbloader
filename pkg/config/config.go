@@ -1,8 +1,12 @@
 package config
 
 import (
+	"bufio"
+	"errors"
+	"log"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -53,6 +57,10 @@ type YTDLConfig struct {
 }
 
 func Load() *Config {
+	if err := loadDotEnv(".env"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("Failed to read .env: %v", err)
+	}
+
 	return &Config{
 		Server: ServerConfig{
 			Host:     getEnv("SERVER_HOST", ""),
@@ -83,6 +91,36 @@ func Load() *Config {
 		},
 		WebDir: getEnv("WEB_DIR", "web"),
 	}
+}
+
+// loadDotEnv sets variables from a KEY=VALUE file; real environment variables win.
+func loadDotEnv(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') && value[len(value)-1] == value[0] {
+			value = value[1 : len(value)-1]
+		}
+		if _, exists := os.LookupEnv(key); !exists {
+			os.Setenv(key, value)
+		}
+	}
+	return scanner.Err()
 }
 
 func getEnv(key, fallback string) string {
