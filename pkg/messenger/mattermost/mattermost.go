@@ -43,17 +43,13 @@ func New(url, token string, agent *agent.Agent) (*Messenger, error) {
 	return m, nil
 }
 
+// Start only logs a notice: Mattermost is send-only (files for downloads
+// requested elsewhere), the bot does not read posts.
 func (m *Messenger) Start(ctx context.Context) error {
-	log.Println("Mattermost bot started")
+	log.Println("mattermost: receiving is not supported")
 
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			time.Sleep(1 * time.Second)
-		}
-	}
+	<-ctx.Done()
+	return nil
 }
 
 func (m *Messenger) SendPost(channelID, message string) error {

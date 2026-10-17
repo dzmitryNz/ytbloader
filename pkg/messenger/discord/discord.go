@@ -11,16 +11,34 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
 	"github.com/mitry/ytbloader/pkg/agent"
 )
 
 const defaultBaseURL = "https://discord.com/api/v10"
 
+// maxMessageLen is Discord's limit for the content of one message.
+const maxMessageLen = 2000
+
+// processor is the part of *agent.Agent the messenger uses.
+type processor interface {
+	ProcessMessage(ctx context.Context, messengerID string, userID int64, chatID int64, message string) (*agent.Response, error)
+}
+
+// outbound sends replies; the messenger itself sends them over the REST API.
+type outbound interface {
+	SendMessage(channelID, message string) error
+	sendFile(messengerID string, chatID int64, filePath string) error
+}
+
 type Messenger struct {
 	token   string
-	agent   *agent.Agent
+	agent   processor
+	out     outbound
 	client  *http.Client
 	baseURL string
 }
@@ -29,30 +47,120 @@ type DiscordMessage struct {
 	Content string `json:"content"`
 }
 
-func New(token string, agent *agent.Agent) (*Messenger, error) {
+func New(token string, agt *agent.Agent) (*Messenger, error) {
 	m := &Messenger{
 		token:   token,
-		agent:   agent,
+		agent:   agt,
 		client:  &http.Client{Timeout: 30 * time.Second},
 		baseURL: defaultBaseURL,
 	}
+	m.out = m
 
-	agent.RegisterSender("discord", m.sendFile)
+	agt.RegisterSender("discord", m.sendFile)
 
 	return m, nil
 }
 
+// Start connects to the gateway and answers commands until ctx is cancelled.
 func (m *Messenger) Start(ctx context.Context) error {
-	log.Println("Discord bot started")
+	session, err := discordgo.New("Bot " + m.token)
+	if err != nil {
+		return fmt.Errorf("failed to create Discord session: %w", err)
+	}
+	session.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
+	session.AddHandler(func(_ *discordgo.Session, e *discordgo.MessageCreate) {
+		m.onMessage(ctx, e.Message)
+	})
 
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			time.Sleep(1 * time.Second)
+	if err := session.Open(); err != nil {
+		return fmt.Errorf("failed to connect to Discord: %w", err)
+	}
+	defer session.Close()
+	log.Println("Discord gateway connected")
+
+	<-ctx.Done()
+	return nil
+}
+
+// onMessage passes slash commands from people to the agent. Other messages are
+// ignored, so the bot stays quiet in busy channels and never answers bots.
+func (m *Messenger) onMessage(ctx context.Context, msg *discordgo.Message) {
+	if msg == nil || msg.Author == nil || msg.Author.Bot || !strings.HasPrefix(msg.Content, "/") {
+		return
+	}
+
+	if err := m.handle(ctx, msg.Author.ID, msg.ChannelID, msg.Content); err != nil {
+		log.Printf("Discord message from %s in %s: %v", msg.Author.ID, msg.ChannelID, err)
+	}
+}
+
+func (m *Messenger) handle(ctx context.Context, userID, channelID, content string) error {
+	uid, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid user id %q: %w", userID, err)
+	}
+	cid, err := strconv.ParseInt(channelID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid channel id %q: %w", channelID, err)
+	}
+
+	resp, err := m.agent.ProcessMessage(ctx, "discord", uid, cid, content)
+	if err != nil {
+		m.reply(channelID, "Error processing message")
+		return fmt.Errorf("process message: %w", err)
+	}
+
+	m.reply(channelID, resp.Text)
+
+	if resp.HasFile {
+		if err := m.out.sendFile("discord", cid, resp.FilePath); err != nil {
+			return fmt.Errorf("send file: %w", err)
 		}
 	}
+	return nil
+}
+
+func (m *Messenger) reply(channelID, text string) {
+	for _, part := range splitMessage(text, maxMessageLen) {
+		if err := m.out.SendMessage(channelID, part); err != nil {
+			log.Printf("Failed to send Discord message: %v", err)
+			return
+		}
+	}
+}
+
+// splitMessage cuts text into pieces of at most limit bytes, on line
+// boundaries where it can.
+func splitMessage(text string, limit int) []string {
+	var parts []string
+	var cur string
+	open := false
+
+	for _, line := range strings.Split(text, "\n") {
+		for len(line) > limit {
+			if open {
+				parts = append(parts, cur)
+				open = false
+			}
+			parts = append(parts, line[:limit])
+			line = line[limit:]
+		}
+
+		switch {
+		case !open:
+			cur, open = line, true
+		case len(cur)+1+len(line) <= limit:
+			cur += "\n" + line
+		default:
+			parts = append(parts, cur)
+			cur = line
+		}
+	}
+	if open {
+		parts = append(parts, cur)
+	}
+
+	return parts
 }
 
 func (m *Messenger) SendMessage(channelID, message string) error {
