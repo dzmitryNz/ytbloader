@@ -591,3 +591,57 @@ func (db *DB) CountNewVideosSince(channelID int64, since time.Time) (int, error)
 	).Scan(&count)
 	return count, err
 }
+
+type NewVideo struct {
+	Video
+	ChannelName string
+}
+
+const recentNewFilter = ` FROM videos v JOIN channels c ON c.id = v.channel_id
+	WHERE datetime(v.created_at) > datetime(?)
+	  AND datetime(v.created_at) > datetime(c.created_at, '+2 minutes')
+	  AND v.url NOT IN (SELECT url FROM downloads WHERE status = 'completed')
+	  AND v.url NOT IN (SELECT url FROM video_downloads)`
+
+// ListRecentNewVideos lists videos stored since the given time that are not
+// downloaded yet, newest first, and the count before limit. The first batch
+// of a fresh subscription is stored within minutes of the channel row and is
+// skipped: it is the channel's back catalogue, not news.
+func (db *DB) ListRecentNewVideos(since time.Time, limit int) ([]NewVideo, int, error) {
+	since = since.UTC()
+
+	var total int
+	if err := db.conn.QueryRow(`SELECT COUNT(*)`+recentNewFilter, since).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := db.conn.Query(
+		`SELECT v.id, v.channel_id, v.url, v.title, v.duration, v.published, v.position, v.created_at, COALESCE(c.name, '')`+
+			recentNewFilter+` ORDER BY v.created_at DESC, v.position ASC LIMIT ?`,
+		since, limit,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var videos []NewVideo
+	for rows.Next() {
+		var v NewVideo
+		if err := rows.Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.Position, &v.CreatedAt, &v.ChannelName); err != nil {
+			return nil, 0, err
+		}
+		videos = append(videos, v)
+	}
+	return videos, total, rows.Err()
+}
+
+func (db *DB) GetVideo(id int64) (*Video, error) {
+	v := &Video{}
+	err := db.conn.QueryRow(videoColumns+` FROM videos WHERE id = ?`, id).
+		Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.Position, &v.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
+}

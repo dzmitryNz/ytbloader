@@ -10,18 +10,32 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/mitry/ytbloader/pkg/agent"
 	"github.com/mitry/ytbloader/pkg/db"
 	"github.com/mitry/ytbloader/pkg/downloader"
 )
 
+// videoSource is the part of *downloader.Downloader the handlers depend on.
+type videoSource interface {
+	GetInfo(ctx context.Context, url string) (string, string, error)
+	GetChannelInfo(ctx context.Context, url string) (*downloader.ChannelInfo, error)
+	GetChannelVideos(ctx context.Context, channelURL string, limit int) ([]downloader.VideoInfo, error)
+	GetVideoPublishDate(ctx context.Context, videoURL string) time.Time
+}
+
 type Server struct {
 	server     *http.Server
 	db         *db.DB
-	downloader *downloader.Downloader
+	downloader videoSource
 	agent      *agent.Agent
 	apiToken   string
+
+	// startMu makes the "already queued?" check and the insert of a
+	// download-by-video one step, so two voice requests cannot both start it.
+	startMu sync.Mutex
 }
 
 type DownloadRequest struct {
@@ -48,6 +62,15 @@ func NewServer(addr string, database *db.DB, dl *downloader.Downloader, agt *age
 		apiToken:   apiToken,
 	}
 
+	s.server = &http.Server{
+		Addr:    addr,
+		Handler: s.routes(webDir),
+	}
+
+	return s
+}
+
+func (s *Server) routes(webDir string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.healthHandler)
 	mux.HandleFunc("/api/downloads", s.downloadsHandler)
@@ -58,17 +81,14 @@ func NewServer(addr string, database *db.DB, dl *downloader.Downloader, agt *age
 	mux.HandleFunc("/api/subscriptions/", s.subscriptionHandler)
 	mux.HandleFunc("/api/channels/", s.channelVideosHandler)
 	mux.HandleFunc("/api/video-downloads", s.videoDownloadsHandler)
+	mux.HandleFunc("/api/videos/new", s.newVideosHandler)
+	mux.HandleFunc("/api/videos/", s.videoHandler)
 
 	if webDir != "" {
 		mux.Handle("/", http.FileServer(http.Dir(webDir)))
 	}
 
-	s.server = &http.Server{
-		Addr:    addr,
-		Handler: s.withAuth(mux),
-	}
-
-	return s
+	return s.withAuth(mux)
 }
 
 // withAuth gates the /api routes behind API_TOKEN. Static files stay open so
@@ -203,21 +223,29 @@ func (s *Server) createDownload(w http.ResponseWriter, r *http.Request) {
 
 	title, channelName, _ := s.downloader.GetInfo(r.Context(), req.URL)
 
+	d, err := s.startDownload(req.URL, title, channelName)
+	if err != nil {
+		s.respondError(w, "Failed to create download", http.StatusInternalServerError)
+		return
+	}
+
+	s.respond(w, Response{Success: true, Data: d})
+}
+
+func (s *Server) startDownload(url, title, channelName string) (*db.Download, error) {
 	d := &db.Download{
-		URL:         req.URL,
+		URL:         url,
 		Title:       title,
 		ChannelName: channelName,
 		Status:      "pending",
 	}
 
 	if err := s.db.CreateDownload(d); err != nil {
-		s.respondError(w, "Failed to create download", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 
 	s.agent.ProcessDownload(context.Background(), d)
-
-	s.respond(w, Response{Success: true, Data: d})
+	return d, nil
 }
 
 func (s *Server) getDownload(w http.ResponseWriter, r *http.Request, id string) {
@@ -345,6 +373,11 @@ func (s *Server) subscriptionHandler(w http.ResponseWriter, r *http.Request) {
 	id := extractID(r.URL.Path, "/api/subscriptions/")
 	if id == "" {
 		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	if id == "refresh" {
+		s.refreshAllSubscriptions(w, r)
 		return
 	}
 

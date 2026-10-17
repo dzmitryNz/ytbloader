@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +31,9 @@ type Agent struct {
 	cancels    map[int64]context.CancelFunc
 	// retryDelays are the waits before each retry of a transiently failed download.
 	retryDelays []time.Duration
+
+	refreshMu sync.Mutex
+	refresh   *refreshRun
 }
 
 type Response struct {
@@ -431,6 +436,117 @@ func (a *Agent) handleVideos(ctx context.Context, args []string) (*Response, err
 	return &Response{Text: sb.String()}, nil
 }
 
+// refreshChannel stores the channel's latest videos and returns those added
+// since its previous check.
+func (a *Agent) refreshChannel(ctx context.Context, ch db.Channel) ([]db.Video, error) {
+	videos, err := a.downloader.GetChannelVideos(ctx, ch.URL, 20)
+	if err != nil {
+		return nil, err
+	}
+
+	// Everything stored after the previous check is what's actually new;
+	// UpsertVideo leaves created_at untouched for rows we already had.
+	lastCheck := ch.LastCheck
+
+	for i, v := range videos {
+		_ = a.db.UpsertVideo(&db.Video{
+			ChannelID: ch.ID,
+			URL:       v.URL,
+			Title:     v.Title,
+			Duration:  v.Duration,
+			Position:  i + 1,
+		})
+	}
+
+	newVideos, err := a.db.ListNewVideos(ch.ID, lastCheck)
+	if err != nil {
+		return nil, err
+	}
+	_ = a.db.UpdateChannelLastCheck(ch.ID)
+	return newVideos, nil
+}
+
+type RefreshResult struct {
+	Channels int
+	Failed   []string
+	// Running is true when the caller stopped waiting before the run ended.
+	Running bool
+}
+
+type refreshRun struct {
+	done   chan struct{}
+	result RefreshResult
+}
+
+const (
+	refreshParallel = 3
+	refreshTimeout  = 5 * time.Minute
+)
+
+// RefreshAll checks every subscription. The run outlives the caller: a client
+// that stops waiting must not cancel yt-dlp half-way, and a call made during a
+// run joins it instead of starting another.
+func (a *Agent) RefreshAll(ctx context.Context, wait time.Duration) RefreshResult {
+	a.refreshMu.Lock()
+	run := a.refresh
+	if run == nil {
+		run = &refreshRun{done: make(chan struct{})}
+		a.refresh = run
+		go a.runRefresh(run)
+	}
+	a.refreshMu.Unlock()
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-run.done:
+		return run.result
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+	return RefreshResult{Running: true}
+}
+
+func (a *Agent) runRefresh(run *refreshRun) {
+	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+	defer cancel()
+
+	channels, err := a.db.ListAllChannels()
+	if err != nil {
+		log.Printf("refresh all: list channels: %v", err)
+	}
+
+	var (
+		mu     sync.Mutex
+		failed []string
+		wg     sync.WaitGroup
+		slots  = make(chan struct{}, refreshParallel)
+	)
+	for _, ch := range channels {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func(ch db.Channel) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			if _, err := a.refreshChannel(ctx, ch); err != nil {
+				mu.Lock()
+				failed = append(failed, ch.Name)
+				mu.Unlock()
+			}
+		}(ch)
+	}
+	wg.Wait()
+
+	sort.Strings(failed)
+	run.result = RefreshResult{Channels: len(channels), Failed: failed}
+
+	a.refreshMu.Lock()
+	a.refresh = nil
+	a.refreshMu.Unlock()
+	close(run.done)
+}
+
 func (a *Agent) handleNewVideos(ctx context.Context, messengerID string, userID int64, args []string) (*Response, error) {
 	page := 1
 	if len(args) >= 1 {
@@ -455,30 +571,10 @@ func (a *Agent) handleNewVideos(ctx context.Context, messengerID string, userID 
 	}
 
 	for _, ch := range channels {
-		videos, err := a.downloader.GetChannelVideos(ctx, ch.URL, 20)
+		newVideos, err := a.refreshChannel(ctx, ch)
 		if err != nil {
 			continue
 		}
-
-		// Everything stored after the previous check is what's actually new;
-		// UpsertVideo leaves created_at untouched for rows we already had.
-		lastCheck := ch.LastCheck
-
-		for i, v := range videos {
-			_ = a.db.UpsertVideo(&db.Video{
-				ChannelID: ch.ID,
-				URL:       v.URL,
-				Title:     v.Title,
-				Duration:  v.Duration,
-				Position:  i + 1,
-			})
-		}
-
-		newVideos, err := a.db.ListNewVideos(ch.ID, lastCheck)
-		if err != nil {
-			continue
-		}
-		_ = a.db.UpdateChannelLastCheck(ch.ID)
 
 		if len(newVideos) > 0 {
 			allNewVideos = append(allNewVideos, struct {
