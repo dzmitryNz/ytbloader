@@ -263,3 +263,106 @@ func TestChannelNewVideosCount(t *testing.T) {
 		t.Errorf("NewVideosCount after reset = %d, want 0", got.NewVideosCount)
 	}
 }
+
+func addVideoAt(t *testing.T, d *DB, c *Channel, url string, position int, createdAt string) {
+	t.Helper()
+	if err := d.UpsertVideo(&Video{ChannelID: c.ID, URL: url, Title: url, Position: position}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.conn.Exec(`UPDATE videos SET created_at = ? WHERE channel_id = ? AND url = ?`, createdAt, c.ID, url); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func ageChannel(t *testing.T, d *DB, c *Channel, createdAt string) {
+	t.Helper()
+	if _, err := d.conn.Exec(`UPDATE channels SET created_at = ? WHERE id = ?`, createdAt, c.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func recentURLs(t *testing.T, d *DB, since time.Time, limit int) ([]string, int) {
+	t.Helper()
+	got, total, err := d.ListRecentNewVideos(since, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	urls := make([]string, 0, len(got))
+	for _, v := range got {
+		urls = append(urls, v.URL)
+	}
+	return urls, total
+}
+
+func TestListRecentNewVideosSkipsFirstBatchOfFreshSubscription(t *testing.T) {
+	d := newTestDB(t)
+	c := newChannel(t, d, "https://y/chan")
+	if err := d.UpsertVideo(&Video{ChannelID: c.ID, URL: "https://y/first", Title: "first", Position: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	urls, total := recentURLs(t, d, time.Now().UTC().Add(-72*time.Hour), 5)
+	if len(urls) != 0 || total != 0 {
+		t.Errorf("fresh subscription batch listed: %v (total %d)", urls, total)
+	}
+
+	ageChannel(t, d, c, time.Now().UTC().Add(-time.Hour).Format("2006-01-02 15:04:05"))
+	urls, total = recentURLs(t, d, time.Now().UTC().Add(-72*time.Hour), 5)
+	if len(urls) != 1 || urls[0] != "https://y/first" || total != 1 {
+		t.Errorf("video added after the first batch window = %v (total %d), want it listed", urls, total)
+	}
+}
+
+func TestListRecentNewVideosRespectsSinceAndDownloads(t *testing.T) {
+	d := newTestDB(t)
+	c := newChannel(t, d, "https://y/chan")
+	ageChannel(t, d, c, "2020-01-01 00:00:00")
+	now := time.Now().UTC()
+	recent := now.Add(-time.Hour).Format("2006-01-02 15:04:05")
+	addVideoAt(t, d, c, "https://y/fresh", 1, recent)
+	addVideoAt(t, d, c, "https://y/old", 2, now.Add(-5*24*time.Hour).Format("2006-01-02 15:04:05"))
+	addVideoAt(t, d, c, "https://y/completed", 3, recent)
+	addVideoAt(t, d, c, "https://y/marked", 4, recent)
+	if err := d.CreateDownload(&Download{URL: "https://y/completed", Status: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.MarkVideoDownloaded("https://y/marked"); err != nil {
+		t.Fatal(err)
+	}
+
+	urls, total := recentURLs(t, d, now.Add(-72*time.Hour), 5)
+	if len(urls) != 1 || urls[0] != "https://y/fresh" || total != 1 {
+		t.Errorf("urls = %v (total %d), want only https://y/fresh", urls, total)
+	}
+}
+
+func TestListRecentNewVideosOrderAndLimit(t *testing.T) {
+	d := newTestDB(t)
+	c := newChannel(t, d, "https://y/chan")
+	other := newChannel(t, d, "https://y/other")
+	ageChannel(t, d, c, "2020-01-01 00:00:00")
+	ageChannel(t, d, other, "2020-01-01 00:00:00")
+	now := time.Now().UTC()
+	at := func(ago time.Duration) string { return now.Add(-ago).Format("2006-01-02 15:04:05") }
+	addVideoAt(t, d, c, "https://y/oldest", 1, at(10*time.Hour))
+	addVideoAt(t, d, c, "https://y/newest-b", 2, at(time.Hour))
+	addVideoAt(t, d, c, "https://y/newest-a", 1, at(time.Hour))
+	addVideoAt(t, d, other, "https://y/middle", 1, at(5*time.Hour))
+
+	urls, total := recentURLs(t, d, now.Add(-72*time.Hour), 2)
+	want := []string{"https://y/newest-a", "https://y/newest-b"}
+	if len(urls) != 2 || urls[0] != want[0] || urls[1] != want[1] {
+		t.Errorf("urls = %v, want %v", urls, want)
+	}
+	if total != 4 {
+		t.Errorf("total = %d, want 4", total)
+	}
+
+	got, _, err := d.ListRecentNewVideos(now.Add(-72*time.Hour), 1)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ListRecentNewVideos: %v, %d rows", err, len(got))
+	}
+	if got[0].ChannelName != "chan" {
+		t.Errorf("ChannelName = %q, want chan", got[0].ChannelName)
+	}
+}
