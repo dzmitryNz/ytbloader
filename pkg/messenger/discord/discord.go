@@ -10,15 +10,19 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/mitry/ytbloader/pkg/agent"
 )
 
+const defaultBaseURL = "https://discord.com/api/v10"
+
 type Messenger struct {
-	token  string
-	agent  *agent.Agent
-	client *http.Client
+	token   string
+	agent   *agent.Agent
+	client  *http.Client
+	baseURL string
 }
 
 type DiscordMessage struct {
@@ -27,9 +31,10 @@ type DiscordMessage struct {
 
 func New(token string, agent *agent.Agent) (*Messenger, error) {
 	m := &Messenger{
-		token:  token,
-		agent:  agent,
-		client: &http.Client{Timeout: 30 * time.Second},
+		token:   token,
+		agent:   agent,
+		client:  &http.Client{Timeout: 30 * time.Second},
+		baseURL: defaultBaseURL,
 	}
 
 	agent.RegisterSender("discord", m.sendFile)
@@ -57,7 +62,7 @@ func (m *Messenger) SendMessage(channelID, message string) error {
 		return err
 	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", channelID), bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/channels/%s/messages", m.baseURL, channelID), bytes.NewBuffer(jsonData))
 	if err != nil {
 		return err
 	}
@@ -86,8 +91,9 @@ func (m *Messenger) sendFile(messengerID string, chatID int64, filePath string) 
 	}
 	defer file.Close()
 
-	body := &multipart.Writer{}
-	payload, err := body.CreateFormFile("file", filePath)
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	payload, err := w.CreateFormFile("files[0]", filepath.Base(filePath))
 	if err != nil {
 		return err
 	}
@@ -95,13 +101,16 @@ func (m *Messenger) sendFile(messengerID string, chatID int64, filePath string) 
 	if _, err := io.Copy(payload, file); err != nil {
 		return err
 	}
+	if err := w.Close(); err != nil {
+		return err
+	}
 
-	req, err := http.NewRequest("POST", fmt.Sprintf("https://discord.com/api/v10/channels/%d/messages", chatID), nil)
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/channels/%d/messages", m.baseURL, chatID), &buf)
 	if err != nil {
 		return err
 	}
 
-	req.Header.Set("Content-Type", body.FormDataContentType())
+	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Authorization", "Bot "+m.token)
 
 	resp, err := m.client.Do(req)
@@ -110,7 +119,7 @@ func (m *Messenger) sendFile(messengerID string, chatID int64, filePath string) 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to send file: %s", string(respBody))
 	}
