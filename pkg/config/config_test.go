@@ -35,7 +35,10 @@ func TestLoadReadsDotEnv(t *testing.T) {
 	isolateEnv(t)
 	writeDotEnv(t, "# comment\n\nSERVER_PORT=9999\nAPI_TOKEN=\"x\"\nDB_PATH='my.db'\n")
 
-	cfg := Load()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
 
 	if cfg.Server.Port != "9999" {
 		t.Errorf("Port = %q, want 9999", cfg.Server.Port)
@@ -53,7 +56,10 @@ func TestEnvOverridesDotEnv(t *testing.T) {
 	writeDotEnv(t, "SERVER_PORT=9999\n")
 	t.Setenv("SERVER_PORT", "7000")
 
-	cfg := Load()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
 
 	if cfg.Server.Port != "7000" {
 		t.Errorf("Port = %q, want 7000", cfg.Server.Port)
@@ -64,7 +70,10 @@ func TestMissingDotEnvIsFine(t *testing.T) {
 	isolateEnv(t)
 	t.Chdir(t.TempDir())
 
-	cfg := Load()
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
 
 	if cfg.Server.Port != "8070" {
 		t.Errorf("Port = %q, want default 8070", cfg.Server.Port)
@@ -93,5 +102,48 @@ func TestValidateRejectsEmptyTokenOnPublicHost(t *testing.T) {
 		if (err != nil) != tt.wantErr {
 			t.Errorf("host %q token %q: err = %v, wantErr %v", tt.host, tt.token, err, tt.wantErr)
 		}
+	}
+}
+
+func TestLoadRejectsBadInt(t *testing.T) {
+	isolateEnv(t)
+	t.Chdir(t.TempDir())
+	t.Setenv("YTDLP_MAX_CONCURRENT", "abc")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected an error for a non-numeric YTDLP_MAX_CONCURRENT")
+	}
+}
+
+func TestLoadDefaults(t *testing.T) {
+	isolateEnv(t)
+	t.Chdir(t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.YTDL.MaxConcurrent != 2 || cfg.YTDL.RemoteComponents != "ejs:github" || cfg.YTDL.PlayerClient != "web_embedded" {
+		t.Errorf("unexpected yt-dlp defaults: %+v", cfg.YTDL)
+	}
+	if cfg.Database.Path != "ytbloader.db" || cfg.YTDL.OutputDir != "./downloads" || cfg.YTDL.BinaryPath != "yt-dlp" || cfg.WebDir != "web" {
+		t.Errorf("unexpected defaults: db %q, output %q, binary %q, web %q", cfg.Database.Path, cfg.YTDL.OutputDir, cfg.YTDL.BinaryPath, cfg.WebDir)
+	}
+}
+
+func TestEmptyValueDropsDefaultedOption(t *testing.T) {
+	isolateEnv(t)
+	t.Chdir(t.TempDir())
+	t.Setenv("YTDLP_REMOTE_COMPONENTS", "")
+	t.Setenv("YTDLP_PLAYER_CLIENT", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.YTDL.RemoteComponents != "" || cfg.YTDL.PlayerClient != "" {
+		t.Errorf("empty variables must switch the yt-dlp flags off, got %q / %q", cfg.YTDL.RemoteComponents, cfg.YTDL.PlayerClient)
 	}
 }

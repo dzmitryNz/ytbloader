@@ -7,8 +7,9 @@ import (
 	"log"
 	"net"
 	"os"
-	"strconv"
 	"strings"
+
+	"github.com/caarlos0/env/v11"
 )
 
 type Config struct {
@@ -18,81 +19,82 @@ type Config struct {
 	Discord  DiscordConfig
 	Matter   MatterConfig
 	YTDL     YTDLConfig
-	WebDir   string
+	WebDir   string `env:"WEB_DIR"`
 }
 
 type ServerConfig struct {
-	Host string // empty = all interfaces
-	Port string
+	Host string `env:"SERVER_HOST"` // empty = all interfaces
+	Port string `env:"SERVER_PORT"`
 	// APIToken guards the HTTP API. Empty means no authentication.
-	APIToken string
+	APIToken string `env:"API_TOKEN"`
 }
 
 type DatabaseConfig struct {
-	Path string
+	Path string `env:"DB_PATH"`
 }
 
 type TelegramConfig struct {
-	BotToken string
+	BotToken string `env:"TELEGRAM_BOT_TOKEN"`
 }
 
 type DiscordConfig struct {
-	BotToken string
+	BotToken string `env:"DISCORD_BOT_TOKEN"`
 }
 
 type MatterConfig struct {
-	URL      string
-	BotToken string
+	URL      string `env:"MATTERMOST_URL"`
+	BotToken string `env:"MATTERMOST_BOT_TOKEN"`
 }
 
 type YTDLConfig struct {
-	BinaryPath    string
-	OutputDir     string
-	MaxConcurrent int
+	BinaryPath    string `env:"YTDLP_PATH"`
+	OutputDir     string `env:"YTDLP_OUTPUT_DIR"`
+	MaxConcurrent int    `env:"YTDLP_MAX_CONCURRENT"`
 	// YouTube now rejects plain media requests with 403, so yt-dlp needs a JS
 	// runtime for the player challenges, the EJS solver, a PO token provider
 	// and a client whose formats are still served over plain HTTPS.
-	JSRuntime        string
-	RemoteComponents string
-	POTScript        string
-	PlayerClient     string
+	JSRuntime        string `env:"YTDLP_JS_RUNTIME"`
+	RemoteComponents string `env:"YTDLP_REMOTE_COMPONENTS"`
+	POTScript        string `env:"YTDLP_POT_SCRIPT"`
+	PlayerClient     string `env:"YTDLP_PLAYER_CLIENT"`
 }
 
-func Load() *Config {
+func defaults() *Config {
+	return &Config{
+		Server:   ServerConfig{Port: "8070"},
+		Database: DatabaseConfig{Path: "ytbloader.db"},
+		YTDL: YTDLConfig{
+			BinaryPath:       "yt-dlp",
+			OutputDir:        "./downloads",
+			MaxConcurrent:    2,
+			RemoteComponents: "ejs:github",
+			PlayerClient:     "web_embedded",
+		},
+		WebDir: "web",
+	}
+}
+
+func Load() (*Config, error) {
 	if err := loadDotEnv(".env"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("Failed to read .env: %v", err)
 	}
 
-	return &Config{
-		Server: ServerConfig{
-			Host:     getEnv("SERVER_HOST", ""),
-			Port:     getEnv("SERVER_PORT", "8070"),
-			APIToken: getEnv("API_TOKEN", ""),
-		},
-		Database: DatabaseConfig{
-			Path: getEnv("DB_PATH", "ytbloader.db"),
-		},
-		Telegram: TelegramConfig{
-			BotToken: getEnv("TELEGRAM_BOT_TOKEN", ""),
-		},
-		Discord: DiscordConfig{
-			BotToken: getEnv("DISCORD_BOT_TOKEN", ""),
-		},
-		Matter: MatterConfig{
-			URL:      getEnv("MATTERMOST_URL", ""),
-			BotToken: getEnv("MATTERMOST_BOT_TOKEN", ""),
-		},
-		YTDL: YTDLConfig{
-			BinaryPath:       getEnv("YTDLP_PATH", "yt-dlp"),
-			OutputDir:        getEnv("YTDLP_OUTPUT_DIR", "./downloads"),
-			MaxConcurrent:    getEnvInt("YTDLP_MAX_CONCURRENT", 2),
-			JSRuntime:        getEnv("YTDLP_JS_RUNTIME", ""),
-			RemoteComponents: getEnv("YTDLP_REMOTE_COMPONENTS", "ejs:github"),
-			POTScript:        getEnv("YTDLP_POT_SCRIPT", ""),
-			PlayerClient:     getEnv("YTDLP_PLAYER_CLIENT", "web_embedded"),
-		},
-		WebDir: getEnv("WEB_DIR", "web"),
+	cfg := defaults()
+	if err := env.Parse(cfg); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
+
+	// env.Parse ignores empty values; for these two an explicitly empty variable
+	// switches the yt-dlp flag off instead of falling back to the default.
+	for key, field := range map[string]*string{
+		"YTDLP_REMOTE_COMPONENTS": &cfg.YTDL.RemoteComponents,
+		"YTDLP_PLAYER_CLIENT":     &cfg.YTDL.PlayerClient,
+	} {
+		if v, ok := os.LookupEnv(key); ok && v == "" {
+			*field = ""
+		}
+	}
+	return cfg, nil
 }
 
 // Validate refuses to expose the API without authentication on a non-loopback host.
@@ -139,20 +141,4 @@ func loadDotEnv(path string) error {
 		}
 	}
 	return scanner.Err()
-}
-
-func getEnv(key, fallback string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
-	}
-	return fallback
-}
-
-func getEnvInt(key string, fallback int) int {
-	if value, exists := os.LookupEnv(key); exists {
-		if intVal, err := strconv.Atoi(value); err == nil {
-			return intVal
-		}
-	}
-	return fallback
 }
