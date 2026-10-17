@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 func TestStartLogsSendOnlyOnceAndStopsWithContext(t *testing.T) {
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(nil) })
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	m := &Messenger{}
 	ctx, cancel := context.WithCancel(context.Background())

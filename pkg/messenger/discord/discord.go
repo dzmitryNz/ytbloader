@@ -75,7 +75,11 @@ func (m *Messenger) Start(ctx context.Context) error {
 	if err := session.Open(); err != nil {
 		return fmt.Errorf("failed to connect to Discord: %w", err)
 	}
-	defer session.Close()
+	defer func() {
+		if err := session.Close(); err != nil {
+			log.Printf("Failed to close Discord session: %v", err)
+		}
+	}()
 	log.Println("Discord gateway connected")
 
 	<-ctx.Done()
