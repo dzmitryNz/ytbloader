@@ -17,6 +17,6 @@ WORKDIR /root/
 COPY --from=builder /bin/ytbloader .
 COPY .env.example .env
 
-EXPOSE 8080
+EXPOSE 8070
 
 CMD ["./ytbloader"]
