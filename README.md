@@ -50,8 +50,8 @@ ytbloader/
 │   ├── api/server.go             # REST API (net/http)
 │   └── messenger/
 │       ├── telegram/telegram.go  # Telegram Bot API (go-telegram/bot)
-│       ├── discord/discord.go    # Discord Bot (HTTP API)
-│       └── mattermost/mattermost.go  # Mattermost Bot (HTTP API)
+│       ├── discord/discord.go    # Discord Bot (gateway for commands, HTTP API for replies)
+│       └── mattermost/mattermost.go  # Mattermost (send-only, HTTP API)
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml
@@ -111,9 +111,9 @@ make dev
 | `SERVER_PORT` | Порт API сервера | `8070` |
 | `DB_PATH` | Путь к SQLite файлу | `ytbloader.db` |
 | `TELEGRAM_BOT_TOKEN` | Токен Telegram бота | (пусто) |
-| `DISCORD_BOT_TOKEN` | Токен Discord бота | (пусто) |
+| `DISCORD_BOT_TOKEN` | Токен Discord бота. Бот читает сообщения вида `/команда`; в Developer Portal включите Message Content Intent | (пусто) |
 | `MATTERMOST_URL` | URL Mattermost сервера | (пусто) |
-| `MATTERMOST_BOT_TOKEN` | Токен Mattermost бота | (пусто) |
+| `MATTERMOST_BOT_TOKEN` | Токен Mattermost бота (только отправка файлов, команды из Mattermost не принимаются) | (пусто) |
 | `YTDLP_PATH` | Путь к бинарнику yt-dlp | `yt-dlp` |
 | `YTDLP_OUTPUT_DIR` | Директория для MP3 файлов | `./downloads` |
 | `YTDLP_MAX_CONCURRENT` | Сколько загрузок выполняется одновременно | `2` |
@@ -374,7 +374,7 @@ POST /api/videos/:id/download
 1. После скачивания MP3, бот отправляет файл через API мессенджера
 2. Telegram - отправляет документ через `sendDocument`
 3. Discord - отправляет файл через multipart upload
-4. Mattermost - загружает файл через `/api/v4/files/upload`
+4. Mattermost - загружает файл через `/api/v4/files`
 
 **Примечание:** Файлы также сохраняются в локальную директорию `./downloads/` независимо от флага `--send`.
 
@@ -513,9 +513,8 @@ curl http://localhost:8070/api/tasks/1
 - **yt-dlp** - скачивание YouTube
 - **net/http** - REST API
 - **go-telegram/bot** - Telegram
-- **HTTP API** - Discord и Mattermost
+- **discordgo** - Discord (gateway), **HTTP API** - ответы Discord и Mattermost
 
 ## Improvement proposals
 
 - [ ] Auto-download new videos from subscriptions; clean old files or limit disk space in `downloads/`.
-- [ ] Discord does not receive messages: `Start()` in `pkg/messenger/discord/discord.go` is an empty loop. Connect to the Discord gateway with [discordgo](https://github.com/bwmarrin/discordgo) and pass messages to the agent.

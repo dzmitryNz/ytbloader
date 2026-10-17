@@ -66,8 +66,12 @@ func main() {
 		if err != nil {
 			log.Printf("Failed to initialize Discord bot: %v", err)
 		} else {
-			go dc.Start(ctx)
-			log.Println("Discord bot started")
+			go func() {
+				if err := dc.Start(ctx); err != nil {
+					log.Printf("Discord bot error: %v", err)
+				}
+			}()
+			log.Println("Discord bot starting")
 		}
 	}
 
@@ -77,7 +81,7 @@ func main() {
 			log.Printf("Failed to initialize Mattermost bot: %v", err)
 		} else {
 			go mm.Start(ctx)
-			log.Println("Mattermost bot started")
+			log.Println("Mattermost enabled (send-only)")
 		}
 	}
 
