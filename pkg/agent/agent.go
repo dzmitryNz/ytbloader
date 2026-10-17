@@ -333,7 +333,7 @@ func (a *Agent) handleListSubs(messengerID string, userID int64) (*Response, err
 	var sb strings.Builder
 	sb.WriteString("Your subscriptions:\n\n")
 	for _, c := range channels {
-		sb.WriteString(fmt.Sprintf("  %d. %s\n     %s\n", c.ID, c.Name, c.URL))
+		fmt.Fprintf(&sb, "  %d. %s\n     %s\n", c.ID, c.Name, c.URL)
 	}
 	sb.WriteString("\nUse /videos <id> to see videos\nUse /new to see new videos")
 
@@ -416,16 +416,16 @@ func (a *Agent) handleVideos(ctx context.Context, args []string) (*Response, err
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Videos in %s (page %d/%d):\n\n", channel.Name, page, totalPages))
+	fmt.Fprintf(&sb, "Videos in %s (page %d/%d):\n\n", channel.Name, page, totalPages)
 
 	for i, v := range dbVideos {
 		num := offset + i + 1
 		duration := formatDuration(v.Duration)
-		sb.WriteString(fmt.Sprintf("  %d. %s [%s]\n     /dl %s --send\n", num, v.Title, duration, v.URL))
+		fmt.Fprintf(&sb, "  %d. %s [%s]\n     /dl %s --send\n", num, v.Title, duration, v.URL)
 	}
 
 	if page < totalPages {
-		sb.WriteString(fmt.Sprintf("\n/page %d - next page", page+1))
+		fmt.Fprintf(&sb, "\n/page %d - next page", page+1)
 	}
 
 	return &Response{Text: sb.String()}, nil
@@ -496,9 +496,9 @@ func (a *Agent) handleNewVideos(ctx context.Context, messengerID string, userID 
 	sb.WriteString("New videos:\n\n")
 
 	for _, entry := range allNewVideos {
-		sb.WriteString(fmt.Sprintf("  %s:\n", entry.ChannelName))
+		fmt.Fprintf(&sb, "  %s:\n", entry.ChannelName)
 		for _, v := range entry.Videos {
-			sb.WriteString(fmt.Sprintf("    - %s\n      /dl %s --send\n", v.Title, v.URL))
+			fmt.Fprintf(&sb, "    - %s\n      /dl %s --send\n", v.Title, v.URL)
 		}
 		sb.WriteString("\n")
 	}
@@ -542,7 +542,7 @@ func (a *Agent) handleListTasks(messengerID string, userID int64) (*Response, er
 		if t.Status == "done" {
 			status = "●"
 		}
-		sb.WriteString(fmt.Sprintf("%s %d. %s\n", status, t.ID, t.Title))
+		fmt.Fprintf(&sb, "%s %d. %s\n", status, t.ID, t.Title)
 	}
 
 	return &Response{Text: sb.String()}, nil
