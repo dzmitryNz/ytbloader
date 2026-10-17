@@ -8,18 +8,29 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Telegram TelegramConfig
-	Discord  DiscordConfig
-	Matter   MatterConfig
-	YTDL     YTDLConfig
-	WebDir   string `env:"WEB_DIR"`
+	Server    ServerConfig
+	Database  DatabaseConfig
+	Telegram  TelegramConfig
+	Discord   DiscordConfig
+	Matter    MatterConfig
+	YTDL      YTDLConfig
+	Downloads DownloadsConfig
+	WebDir    string `env:"WEB_DIR"`
+}
+
+// DownloadsConfig holds the background download settings; zero means off.
+type DownloadsConfig struct {
+	// AutoInterval is how often subscriptions are polled for new videos.
+	AutoInterval time.Duration `env:"AUTO_DOWNLOAD_INTERVAL"`
+	// MaxGB and MaxAgeDays limit the downloaded files kept on disk.
+	MaxGB      float64 `env:"DOWNLOADS_MAX_GB"`
+	MaxAgeDays int     `env:"DOWNLOADS_MAX_AGE_DAYS"`
 }
 
 type ServerConfig struct {
@@ -101,6 +112,9 @@ func Load() (*Config, error) {
 func (c *Config) Validate() error {
 	if c.Server.APIToken == "" && !isLoopbackHost(c.Server.Host) {
 		return fmt.Errorf("API_TOKEN is empty while SERVER_HOST %q is not a loopback address: set API_TOKEN or bind SERVER_HOST=127.0.0.1", c.Server.Host)
+	}
+	if c.Downloads.AutoInterval < 0 || c.Downloads.MaxGB < 0 || c.Downloads.MaxAgeDays < 0 {
+		return errors.New("AUTO_DOWNLOAD_INTERVAL, DOWNLOADS_MAX_GB and DOWNLOADS_MAX_AGE_DAYS must not be negative")
 	}
 	return nil
 }
