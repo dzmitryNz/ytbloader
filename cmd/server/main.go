@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/mitry/ytbloader/pkg/agent"
 	"github.com/mitry/ytbloader/pkg/api"
@@ -41,6 +42,11 @@ func main() {
 	})
 
 	agt := agent.New(database, dl)
+	agt.SetRetention(agent.Retention{
+		Dir:      cfg.YTDL.OutputDir,
+		MaxBytes: int64(cfg.Downloads.MaxGB * (1 << 30)),
+		MaxAge:   time.Duration(cfg.Downloads.MaxAgeDays) * 24 * time.Hour,
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -83,6 +89,15 @@ func main() {
 			go mm.Start(ctx)
 			log.Println("Mattermost enabled (send-only)")
 		}
+	}
+
+	// Started after the messengers so their file senders are registered.
+	if cfg.Downloads.AutoInterval > 0 {
+		go agt.RunSubscriptionPoller(ctx, cfg.Downloads.AutoInterval)
+		log.Printf("Auto-download polls subscriptions every %s", cfg.Downloads.AutoInterval)
+	}
+	if cfg.Downloads.MaxGB > 0 || cfg.Downloads.MaxAgeDays > 0 {
+		go agt.RunCleanup(ctx, 24*time.Hour)
 	}
 
 	apiServer := api.NewServer(net.JoinHostPort(cfg.Server.Host, cfg.Server.Port), database, dl, agt, cfg.WebDir, cfg.Server.APIToken)

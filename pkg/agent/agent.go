@@ -34,6 +34,9 @@ type Agent struct {
 
 	refreshMu sync.Mutex
 	refresh   *refreshRun
+
+	retentionMu sync.Mutex
+	retention   Retention
 }
 
 type Response struct {
@@ -100,6 +103,8 @@ func (a *Agent) ProcessMessage(ctx context.Context, messengerID string, userID i
 		return a.handleUnsub(parts[1:])
 	case "/videos":
 		return a.handleVideos(ctx, parts[1:])
+	case "/auto":
+		return a.handleAuto(ctx, messengerID, userID, chatID, parts[1:])
 	case "/new":
 		return a.handleNewVideos(ctx, messengerID, userID, parts[1:])
 	case "/help", "/h":
@@ -303,6 +308,8 @@ func (a *Agent) processDownload(ctx context.Context, d *db.Download) {
 			}
 		}
 	}
+
+	a.cleanupAfterDownload()
 }
 
 func (a *Agent) handleSubscribe(ctx context.Context, messengerID string, userID int64, chatID int64, args []string) (*Response, error) {
@@ -474,17 +481,12 @@ func (a *Agent) handleVideos(ctx context.Context, args []string) (*Response, err
 	return resp, nil
 }
 
-// refreshChannel stores the channel's latest videos and returns those added
-// since its previous check.
-func (a *Agent) refreshChannel(ctx context.Context, ch db.Channel) ([]db.Video, error) {
+// storeChannelVideos fetches the channel's latest videos and upserts them.
+func (a *Agent) storeChannelVideos(ctx context.Context, ch db.Channel) error {
 	videos, err := a.downloader.GetChannelVideos(ctx, ch.URL, 20)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	// Everything stored after the previous check is what's actually new;
-	// UpsertVideo leaves created_at untouched for rows we already had.
-	lastCheck := ch.LastCheck
 
 	for i, v := range videos {
 		_ = a.db.UpsertVideo(&db.Video{
@@ -494,6 +496,19 @@ func (a *Agent) refreshChannel(ctx context.Context, ch db.Channel) ([]db.Video, 
 			Duration:  v.Duration,
 			Position:  i + 1,
 		})
+	}
+	return nil
+}
+
+// refreshChannel stores the channel's latest videos and returns those added
+// since its previous check.
+func (a *Agent) refreshChannel(ctx context.Context, ch db.Channel) ([]db.Video, error) {
+	// Everything stored after the previous check is what's actually new;
+	// UpsertVideo leaves created_at untouched for rows we already had.
+	lastCheck := ch.LastCheck
+
+	if err := a.storeChannelVideos(ctx, ch); err != nil {
+		return nil, err
 	}
 
 	newVideos, err := a.db.ListNewVideos(ch.ID, lastCheck)
@@ -514,6 +529,9 @@ type RefreshResult struct {
 type refreshRun struct {
 	done   chan struct{}
 	result RefreshResult
+	// poll marks the subscription poller's run, which covers only channels
+	// with auto-download; RefreshAll must not report it as a full refresh.
+	poll bool
 }
 
 const (
@@ -523,19 +541,37 @@ const (
 
 // RefreshAll checks every subscription. The run outlives the caller: a client
 // that stops waiting must not cancel yt-dlp half-way, and a call made during a
-// run joins it instead of starting another.
+// run joins it instead of starting another. A run of the subscription poller is
+// waited out, not joined, because it skips channels without auto-download.
 func (a *Agent) RefreshAll(ctx context.Context, wait time.Duration) RefreshResult {
-	a.refreshMu.Lock()
-	run := a.refresh
-	if run == nil {
-		run = &refreshRun{done: make(chan struct{})}
-		a.refresh = run
-		go a.runRefresh(run)
-	}
-	a.refreshMu.Unlock()
-
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
+
+	var run *refreshRun
+	for run == nil {
+		a.refreshMu.Lock()
+		current := a.refresh
+		switch {
+		case current == nil:
+			run = &refreshRun{done: make(chan struct{})}
+			a.refresh = run
+			go a.runRefresh(run)
+		case !current.poll:
+			run = current
+		}
+		a.refreshMu.Unlock()
+
+		if run != nil {
+			break
+		}
+		select {
+		case <-current.done:
+		case <-timer.C:
+			return RefreshResult{Running: true}
+		case <-ctx.Done():
+			return RefreshResult{Running: true}
+		}
+	}
 
 	select {
 	case <-run.done:
@@ -714,6 +750,7 @@ func (a *Agent) handleHelp() *Response {
 /unsub <id> - Unsubscribe from a channel
 /videos <id> [page] - List videos in a channel
 /new [page] - List new videos from subscriptions
+/auto <id> [on|off] - Download new videos of a channel automatically and send them here
 
 /tasks - List your tasks
 /task <title> - Create a new task

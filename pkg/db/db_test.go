@@ -366,3 +366,143 @@ func TestListRecentNewVideosOrderAndLimit(t *testing.T) {
 		t.Errorf("ChannelName = %q, want chan", got[0].ChannelName)
 	}
 }
+
+func autoURLs(t *testing.T, d *DB, channelID int64) []string {
+	t.Helper()
+	videos, err := d.ListAutoCandidates(channelID)
+	if err != nil {
+		t.Fatalf("ListAutoCandidates: %v", err)
+	}
+	var urls []string
+	for _, v := range videos {
+		urls = append(urls, v.URL)
+	}
+	return urls
+}
+
+func TestSetChannelAutoRoundTrip(t *testing.T) {
+	d := newTestDB(t)
+	c := newChannel(t, d, "https://y/chan")
+
+	got, _ := d.GetChannel(c.ID)
+	if got.AutoDownload || got.AutoChatID != 0 || got.AutoMessenger != "" {
+		t.Fatalf("new channel has auto settings: %+v", got)
+	}
+
+	if err := d.SetChannelAuto(c.ID, true, "discord", 77); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = d.GetChannel(c.ID)
+	if !got.AutoDownload || got.AutoMessenger != "discord" || got.AutoChatID != 77 {
+		t.Errorf("after on: %+v", got)
+	}
+	all, _ := d.ListAllChannels()
+	if len(all) != 1 || !all[0].AutoDownload || all[0].AutoChatID != 77 {
+		t.Errorf("ListAllChannels = %+v", all)
+	}
+	byURL, _ := d.GetChannelByURL("https://y/chan", "telegram", 1)
+	if byURL == nil || !byURL.AutoDownload {
+		t.Errorf("GetChannelByURL = %+v", byURL)
+	}
+	listed, _ := d.ListChannels("telegram", 1)
+	if len(listed) != 1 || !listed[0].AutoDownload {
+		t.Errorf("ListChannels = %+v", listed)
+	}
+
+	if err := d.SetChannelAuto(c.ID, false, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = d.GetChannel(c.ID)
+	if got.AutoDownload {
+		t.Errorf("after off: %+v", got)
+	}
+}
+
+func TestSetChannelAutoOnBaselinesExistingVideos(t *testing.T) {
+	d := newTestDB(t)
+	c := newChannel(t, d, "https://y/chan")
+	for i, u := range []string{"https://y/old1", "https://y/old2"} {
+		if err := d.UpsertVideo(&Video{ChannelID: c.ID, URL: u, Position: i + 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := d.SetChannelAuto(c.ID, true, "telegram", 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := autoURLs(t, d, c.ID); len(got) != 0 {
+		t.Fatalf("back catalogue is a candidate after enabling: %v", got)
+	}
+
+	fresh := &Video{ChannelID: c.ID, URL: "https://y/fresh", Position: 1}
+	if err := d.UpsertVideo(fresh); err != nil {
+		t.Fatal(err)
+	}
+	if got := autoURLs(t, d, c.ID); len(got) != 1 || got[0] != "https://y/fresh" {
+		t.Fatalf("candidates = %v, want the fresh video", got)
+	}
+
+	if err := d.MarkVideoAutoSeen(fresh.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := autoURLs(t, d, c.ID); len(got) != 0 {
+		t.Errorf("candidates after marking seen = %v, want none", got)
+	}
+}
+
+func TestListAutoCandidatesSkipsDownloadedAndInFlight(t *testing.T) {
+	d := newTestDB(t)
+	c := newChannel(t, d, "https://y/chan")
+	if err := d.SetChannelAuto(c.ID, true, "telegram", 10); err != nil {
+		t.Fatal(err)
+	}
+	for i, u := range []string{"https://y/completed", "https://y/marked", "https://y/pending", "https://y/downloading", "https://y/failed", "https://y/plain"} {
+		if err := d.UpsertVideo(&Video{ChannelID: c.ID, URL: u, Position: i + 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for url, status := range map[string]string{
+		"https://y/completed":   "completed",
+		"https://y/pending":     "pending",
+		"https://y/downloading": "downloading",
+		"https://y/failed":      "failed",
+	} {
+		if err := d.CreateDownload(&Download{URL: url, Status: status}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.MarkVideoDownloaded("https://y/marked"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := autoURLs(t, d, c.ID)
+	want := map[string]bool{"https://y/failed": true, "https://y/plain": true}
+	if len(got) != len(want) {
+		t.Fatalf("candidates = %v, want %v", got, want)
+	}
+	for _, u := range got {
+		if !want[u] {
+			t.Errorf("unexpected candidate %q", u)
+		}
+	}
+}
+
+func TestClearDownloadOutputPathKeepsStatus(t *testing.T) {
+	d := newTestDB(t)
+	dl := &Download{URL: "https://y/1", Status: "pending"}
+	if err := d.CreateDownload(dl); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateDownloadResult(dl.ID, "t", "/data/a.mp3", "completed", 5); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.ClearDownloadOutputPath(dl.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := d.GetDownload(dl.ID)
+	if got.OutputPath != "" || got.Status != "completed" || got.Size != 5 {
+		t.Errorf("download = %+v, want empty path, completed, size kept", got)
+	}
+}

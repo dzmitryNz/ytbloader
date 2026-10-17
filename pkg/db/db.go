@@ -53,6 +53,11 @@ type Channel struct {
 	LastCheck      time.Time
 	NewVideosCount int
 	CreatedAt      time.Time
+	// AutoDownload makes the subscription poller download new videos and send
+	// them to AutoChatID over AutoMessenger, the chat that turned it on.
+	AutoDownload  bool
+	AutoChatID    int64
+	AutoMessenger string
 }
 
 type Video struct {
@@ -151,6 +156,10 @@ func (db *DB) migrate() error {
 	_, _ = db.conn.Exec(`ALTER TABLE downloads ADD COLUMN progress INTEGER DEFAULT 0`)
 	_, _ = db.conn.Exec(`ALTER TABLE downloads ADD COLUMN channel_name TEXT DEFAULT ''`)
 	_, _ = db.conn.Exec(`ALTER TABLE channels ADD COLUMN new_videos_count INTEGER DEFAULT 0`)
+	_, _ = db.conn.Exec(`ALTER TABLE channels ADD COLUMN auto_download INTEGER DEFAULT 0`)
+	_, _ = db.conn.Exec(`ALTER TABLE channels ADD COLUMN auto_chat_id INTEGER DEFAULT 0`)
+	_, _ = db.conn.Exec(`ALTER TABLE channels ADD COLUMN auto_messenger TEXT DEFAULT ''`)
+	_, _ = db.conn.Exec(`ALTER TABLE videos ADD COLUMN auto_seen INTEGER DEFAULT 0`)
 
 	_, _ = db.conn.Exec(`CREATE TABLE IF NOT EXISTS video_downloads (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -199,6 +208,13 @@ func (db *DB) UpdateDownloadResult(id int64, title, outputPath, status string, s
 		`UPDATE downloads SET title = ?, output_path = ?, status = ?, size = ?, error_msg = '', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		title, outputPath, status, size, id,
 	)
+	return err
+}
+
+// ClearDownloadOutputPath forgets the file of a download whose file was
+// removed; the row, its status and size stay as history.
+func (db *DB) ClearDownloadOutputPath(id int64) error {
+	_, err := db.conn.Exec(`UPDATE downloads SET output_path = '' WHERE id = ?`, id)
 	return err
 }
 
@@ -350,51 +366,113 @@ func (db *DB) CreateChannel(c *Channel) error {
 	).Scan(&c.ID)
 }
 
-func (db *DB) GetChannel(id int64) (*Channel, error) {
-	c := &Channel{}
-	err := db.conn.QueryRow(
-		`SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at, new_videos_count
-		 FROM channels WHERE id = ?`, id,
-	).Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt, &c.NewVideosCount)
-	if err != nil {
-		return nil, err
-	}
-	return c, nil
+const channelColumns = `SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at, new_videos_count,
+	COALESCE(auto_download, 0), COALESCE(auto_chat_id, 0), COALESCE(auto_messenger, '')`
+
+type rowScanner interface {
+	Scan(dest ...any) error
 }
 
-func (db *DB) GetChannelByURL(url string, messengerID string, userID int64) (*Channel, error) {
-	c := &Channel{}
-	err := db.conn.QueryRow(
-		`SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at, new_videos_count
-		 FROM channels WHERE url = ? AND messenger_id = ? AND user_id = ?`, url, messengerID, userID,
-	).Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt, &c.NewVideosCount)
-	if err != nil {
-		return nil, err
-	}
-	return c, nil
+func scanChannel(row rowScanner) (Channel, error) {
+	var c Channel
+	err := row.Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt, &c.NewVideosCount,
+		&c.AutoDownload, &c.AutoChatID, &c.AutoMessenger)
+	return c, err
 }
 
-func (db *DB) ListChannels(messengerID string, userID int64) ([]Channel, error) {
-	rows, err := db.conn.Query(
-		`SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at, new_videos_count
-		 FROM channels WHERE messenger_id = ? AND user_id = ? ORDER BY created_at DESC`,
-		messengerID, userID,
-	)
-	if err != nil {
-		return nil, err
-	}
+func scanChannels(rows *sql.Rows) ([]Channel, error) {
 	defer rows.Close()
 
 	var channels []Channel
 	for rows.Next() {
-		var c Channel
-		if err := rows.Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt, &c.NewVideosCount); err != nil {
+		c, err := scanChannel(rows)
+		if err != nil {
 			return nil, err
 		}
 		channels = append(channels, c)
 	}
 
 	return channels, nil
+}
+
+func (db *DB) GetChannel(id int64) (*Channel, error) {
+	c, err := scanChannel(db.conn.QueryRow(channelColumns+` FROM channels WHERE id = ?`, id))
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (db *DB) GetChannelByURL(url string, messengerID string, userID int64) (*Channel, error) {
+	c, err := scanChannel(db.conn.QueryRow(
+		channelColumns+` FROM channels WHERE url = ? AND messenger_id = ? AND user_id = ?`, url, messengerID, userID,
+	))
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func (db *DB) ListChannels(messengerID string, userID int64) ([]Channel, error) {
+	rows, err := db.conn.Query(
+		channelColumns+` FROM channels WHERE messenger_id = ? AND user_id = ? ORDER BY created_at DESC`,
+		messengerID, userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanChannels(rows)
+}
+
+// SetChannelAuto turns auto-download on or off. Turning it on also marks every
+// video stored so far as seen, so only videos that appear afterwards are
+// downloaded and not the channel's back catalogue.
+func (db *DB) SetChannelAuto(id int64, on bool, messengerID string, chatID int64) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if on {
+		if _, err := tx.Exec(`UPDATE videos SET auto_seen = 1 WHERE channel_id = ?`, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(
+			`UPDATE channels SET auto_download = 1, auto_messenger = ?, auto_chat_id = ? WHERE id = ?`,
+			messengerID, chatID, id,
+		); err != nil {
+			return err
+		}
+	} else if _, err := tx.Exec(`UPDATE channels SET auto_download = 0 WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ListAutoCandidates lists the channel's videos that auto-download has not
+// handled yet and that are neither downloaded nor being downloaded, oldest
+// first.
+func (db *DB) ListAutoCandidates(channelID int64) ([]Video, error) {
+	rows, err := db.conn.Query(
+		videoColumns+` FROM videos
+		 WHERE channel_id = ? AND auto_seen = 0
+		   AND url NOT IN (SELECT url FROM downloads WHERE status IN ('completed', 'pending', 'downloading'))
+		   AND url NOT IN (SELECT url FROM video_downloads)
+		 ORDER BY position DESC, id ASC`,
+		channelID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanVideos(rows)
+}
+
+// MarkVideoAutoSeen records that auto-download handled the video, so it is not
+// queued again, whatever became of the download.
+func (db *DB) MarkVideoAutoSeen(id int64) error {
+	_, err := db.conn.Exec(`UPDATE videos SET auto_seen = 1 WHERE id = ?`, id)
+	return err
 }
 
 // DeleteChannel removes the channel together with its videos: videos.channel_id
@@ -490,25 +568,11 @@ func (db *DB) CountVideos(channelID int64) (int, error) {
 }
 
 func (db *DB) ListAllChannels() ([]Channel, error) {
-	rows, err := db.conn.Query(
-		`SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at, new_videos_count
-		 FROM channels ORDER BY created_at DESC`,
-	)
+	rows, err := db.conn.Query(channelColumns + ` FROM channels ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var channels []Channel
-	for rows.Next() {
-		var c Channel
-		if err := rows.Scan(&c.ID, &c.URL, &c.Name, &c.MessengerID, &c.UserID, &c.ChatID, &c.LastCheck, &c.CreatedAt, &c.NewVideosCount); err != nil {
-			return nil, err
-		}
-		channels = append(channels, c)
-	}
-
-	return channels, nil
+	return scanChannels(rows)
 }
 
 func (db *DB) GetVideosByChannel(channelID int64, limit int) ([]Video, error) {

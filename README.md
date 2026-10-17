@@ -119,6 +119,9 @@ make dev
 | `YTDLP_MAX_CONCURRENT` | Сколько загрузок выполняется одновременно | `2` |
 | `API_TOKEN` | Токен для HTTP API. Пустой токен допустим только при `SERVER_HOST` = loopback, иначе сервер не стартует | — |
 | `SERVER_HOST` | Адрес, на котором слушает API (пусто — все интерфейсы) | (пусто) |
+| `AUTO_DOWNLOAD_INTERVAL` | Как часто проверять каналы с `/auto ... on` и скачивать новые видео (`30m`, `1h`; `0` — выключено) | `0` |
+| `DOWNLOADS_MAX_GB` | Лимит места под скачанные файлы в ГБ: самые старые файлы удаляются (`0` — без лимита) | `0` |
+| `DOWNLOADS_MAX_AGE_DAYS` | Удалять скачанные файлы старше N дней (`0` — без лимита) | `0` |
 
 ## REST API
 
@@ -435,6 +438,7 @@ POST /api/videos/:id/download
 | `/unsub <id>` | Отписаться от канала | `/unsub 1` |
 | `/videos <id> [page]` | Список видео канала (пагинация, в Telegram кнопки Prev/Next) | `/videos 1 2` |
 | `/new [page]` | Новые видео из подписок | `/new` |
+| `/auto <id> [on\|off]` | Автоматически скачивать новые видео канала и присылать файл в этот чат (нужен `AUTO_DOWNLOAD_INTERVAL`); без `on`/`off` показывает состояние | `/auto 1 on` |
 
 ### Задачи
 
@@ -517,4 +521,3 @@ curl http://localhost:8070/api/tasks/1
 
 ## Improvement proposals
 
-- [ ] Auto-download new videos from subscriptions; clean old files or limit disk space in `downloads/`.
