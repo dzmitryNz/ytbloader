@@ -63,7 +63,7 @@ ytbloader/
 
 ### Зависимости
 
-- Go 1.19+
+- Go 1.24+
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) (для скачивания YouTube)
 - ffmpeg (нужен yt-dlp для конвертации в MP3)
 
@@ -91,6 +91,17 @@ make run
 
 ```bash
 docker-compose up -d
+```
+
+В контейнере API слушает все интерфейсы (`SERVER_HOST=0.0.0.0`), поэтому `API_TOKEN` обязателен: без него сервер не стартует. Переменные берутся из `.env` рядом с `docker-compose.yml`. Версия yt-dlp зафиксирована в `Dockerfile` (`YTDLP_VERSION`, `YTDLP_SHA256`); для обновления поменяйте оба значения.
+
+### Разработка
+
+Для перезапуска сервера при сохранении файлов используется [air](https://github.com/air-verse/air):
+
+```bash
+go install github.com/air-verse/air@latest
+make dev
 ```
 
 ## Конфигурация (.env)
@@ -448,4 +459,3 @@ curl http://localhost:8070/api/tasks/1
 - [ ] Auto-download new videos from subscriptions; clean old files or limit disk space in `downloads/`.
 - [ ] Discord does not receive messages: `Start()` in `pkg/messenger/discord/discord.go` is an empty loop. Connect to the Discord gateway with [discordgo](https://github.com/bwmarrin/discordgo) and pass messages to the agent.
 - [ ] Replace `go-telegram-bot-api` (no commits since 2024-08) with [go-telegram/bot](https://github.com/go-telegram/bot): actively maintained, no dependencies, built-in inline keyboards and paginator for the subscriptions list. [telego](https://github.com/mymmrac/telego) is the alternative if only a current Bot API client is needed.
-- [ ] Live reload in development with [air](https://github.com/air-verse/air): rebuild and restart the server on file save instead of manual `make run`; add `.air.toml` and a `make dev` target.

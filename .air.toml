@@ -1,0 +1,11 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/ytbloader ./cmd/server"
+  bin = "./tmp/ytbloader"
+  include_ext = ["go"]
+  exclude_dir = ["downloads", "data", "tmp", "web", ".git", ".worktrees"]
+  exclude_regex = ["_test\\.go$"]
+  exclude_file = []
+  delay = 500

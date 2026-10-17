@@ -1,7 +1,10 @@
-.PHONY: build run clean
+.PHONY: build run dev clean
 
 build:
 	go build -o bin/ytbloader cmd/server/main.go
+
+dev:
+	air
 
 run: build
 	./bin/ytbloader

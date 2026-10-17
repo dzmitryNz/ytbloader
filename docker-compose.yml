@@ -11,7 +11,7 @@ services:
       - path: .env
         required: false
     environment:
-      - SERVER_HOST=${SERVER_HOST:-}
+      - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8070
       - API_TOKEN=${API_TOKEN:-}
       - DB_PATH=/app/data/ytbloader.db

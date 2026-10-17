@@ -4,3 +4,4 @@
 .env
 downloads/
 bin/
+tmp/
