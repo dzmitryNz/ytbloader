@@ -445,7 +445,6 @@ curl http://localhost:8070/api/tasks/1
 
 ## Improvement proposals
 
-- [ ] Add GitHub Actions: `go vet`, `go test`, `golangci-lint`; bump `go 1.19` in `go.mod`.
 - [ ] Add tests for the downloader (argument building, stubbed yt-dlp) and `db`.
 - [ ] Pin or auto-update yt-dlp; retry failed downloads with backoff.
 - [ ] Auto-download new videos from subscriptions; clean old files or limit disk space in `downloads/`.

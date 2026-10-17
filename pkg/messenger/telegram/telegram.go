@@ -59,17 +59,20 @@ func (m *Messenger) handleMessage(ctx context.Context, message *tgbotapi.Message
 	resp, err := m.agent.ProcessMessage(ctx, "telegram", userID, chatID, message.Text)
 	if err != nil {
 		log.Printf("Error processing message: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Error processing message")
-		m.bot.Send(msg)
+		m.send(tgbotapi.NewMessage(chatID, "Error processing message"))
 		return
 	}
 
-	msg := tgbotapi.NewMessage(chatID, resp.Text)
-	m.bot.Send(msg)
+	m.send(tgbotapi.NewMessage(chatID, resp.Text))
 
 	if resp.HasFile {
-		file := tgbotapi.NewDocument(chatID, tgbotapi.FilePath(resp.FilePath))
-		m.bot.Send(file)
+		m.send(tgbotapi.NewDocument(chatID, tgbotapi.FilePath(resp.FilePath)))
+	}
+}
+
+func (m *Messenger) send(c tgbotapi.Chattable) {
+	if _, err := m.bot.Send(c); err != nil {
+		log.Printf("Failed to send Telegram message: %v", err)
 	}
 }
 

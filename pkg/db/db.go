@@ -145,21 +145,22 @@ func (db *DB) migrate() error {
 		}
 	}
 
-	db.conn.Exec(`ALTER TABLE downloads ADD COLUMN size INTEGER DEFAULT 0`)
-	db.conn.Exec(`ALTER TABLE downloads ADD COLUMN error_msg TEXT DEFAULT ''`)
-	db.conn.Exec(`ALTER TABLE downloads ADD COLUMN progress INTEGER DEFAULT 0`)
-	db.conn.Exec(`ALTER TABLE downloads ADD COLUMN channel_name TEXT DEFAULT ''`)
-	db.conn.Exec(`ALTER TABLE channels ADD COLUMN new_videos_count INTEGER DEFAULT 0`)
+	// Duplicate column errors are expected on an already migrated database.
+	_, _ = db.conn.Exec(`ALTER TABLE downloads ADD COLUMN size INTEGER DEFAULT 0`)
+	_, _ = db.conn.Exec(`ALTER TABLE downloads ADD COLUMN error_msg TEXT DEFAULT ''`)
+	_, _ = db.conn.Exec(`ALTER TABLE downloads ADD COLUMN progress INTEGER DEFAULT 0`)
+	_, _ = db.conn.Exec(`ALTER TABLE downloads ADD COLUMN channel_name TEXT DEFAULT ''`)
+	_, _ = db.conn.Exec(`ALTER TABLE channels ADD COLUMN new_videos_count INTEGER DEFAULT 0`)
 
-	db.conn.Exec(`CREATE TABLE IF NOT EXISTS video_downloads (
+	_, _ = db.conn.Exec(`CREATE TABLE IF NOT EXISTS video_downloads (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		url TEXT NOT NULL UNIQUE,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	)`)
 
-	db.conn.Exec(`DELETE FROM videos WHERE id NOT IN (SELECT MIN(id) FROM videos GROUP BY channel_id, url)`)
-	db.conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_channel_url ON videos(channel_id, url)`)
-	db.conn.Exec(`ALTER TABLE videos ADD COLUMN position INTEGER DEFAULT 0`)
+	_, _ = db.conn.Exec(`DELETE FROM videos WHERE id NOT IN (SELECT MIN(id) FROM videos GROUP BY channel_id, url)`)
+	_, _ = db.conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_channel_url ON videos(channel_id, url)`)
+	_, _ = db.conn.Exec(`ALTER TABLE videos ADD COLUMN position INTEGER DEFAULT 0`)
 
 	return nil
 }
