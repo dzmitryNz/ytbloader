@@ -15,7 +15,6 @@ RUN apk --no-cache add ca-certificates yt-dlp
 WORKDIR /root/
 
 COPY --from=builder /bin/ytbloader .
-COPY .env.example .env
 
 EXPOSE 8070
 

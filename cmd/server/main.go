@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,6 +20,9 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
 
 	database, err := db.New(cfg.Database.Path)
 	if err != nil {
@@ -74,7 +78,7 @@ func main() {
 		}
 	}
 
-	apiServer := api.NewServer(cfg.Server.Host+":"+cfg.Server.Port, database, dl, agt, cfg.WebDir, cfg.Server.APIToken)
+	apiServer := api.NewServer(net.JoinHostPort(cfg.Server.Host, cfg.Server.Port), database, dl, agt, cfg.WebDir, cfg.Server.APIToken)
 	go func() {
 		if err := apiServer.Start(); err != nil {
 			log.Printf("API server error: %v", err)

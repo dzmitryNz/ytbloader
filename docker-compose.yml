@@ -7,13 +7,23 @@ services:
       - "8070:8070"
     volumes:
       - ./data:/app/data
+    env_file:
+      - path: .env
+        required: false
     environment:
+      - SERVER_HOST=${SERVER_HOST:-}
       - SERVER_PORT=8070
+      - API_TOKEN=${API_TOKEN:-}
       - DB_PATH=/app/data/ytbloader.db
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
-      - MATTERMOST_URL=${MATTERMOST_URL}
-      - MATTERMOST_BOT_TOKEN=${MATTERMOST_BOT_TOKEN}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - MATTERMOST_URL=${MATTERMOST_URL:-}
+      - MATTERMOST_BOT_TOKEN=${MATTERMOST_BOT_TOKEN:-}
       - YTDLP_PATH=yt-dlp
       - YTDLP_OUTPUT_DIR=/app/data/downloads
+      - YTDLP_MAX_CONCURRENT=${YTDLP_MAX_CONCURRENT:-2}
+      - YTDLP_JS_RUNTIME=${YTDLP_JS_RUNTIME:-}
+      - YTDLP_REMOTE_COMPONENTS=${YTDLP_REMOTE_COMPONENTS:-ejs:github}
+      - YTDLP_POT_SCRIPT=${YTDLP_POT_SCRIPT:-}
+      - YTDLP_PLAYER_CLIENT=${YTDLP_PLAYER_CLIENT:-web_embedded}
     restart: unless-stopped

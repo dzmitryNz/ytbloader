@@ -3,7 +3,9 @@ package config
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -91,6 +93,22 @@ func Load() *Config {
 		},
 		WebDir: getEnv("WEB_DIR", "web"),
 	}
+}
+
+// Validate refuses to expose the API without authentication on a non-loopback host.
+func (c *Config) Validate() error {
+	if c.Server.APIToken == "" && !isLoopbackHost(c.Server.Host) {
+		return fmt.Errorf("API_TOKEN is empty while SERVER_HOST %q is not a loopback address: set API_TOKEN or bind SERVER_HOST=127.0.0.1", c.Server.Host)
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // loadDotEnv sets variables from a KEY=VALUE file; real environment variables win.

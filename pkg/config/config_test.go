@@ -70,3 +70,28 @@ func TestMissingDotEnvIsFine(t *testing.T) {
 		t.Errorf("Port = %q, want default 8070", cfg.Server.Port)
 	}
 }
+
+func TestValidateRejectsEmptyTokenOnPublicHost(t *testing.T) {
+	tests := []struct {
+		host    string
+		token   string
+		wantErr bool
+	}{
+		{"", "", true},
+		{"0.0.0.0", "", true},
+		{"192.168.1.5", "", true},
+		{"127.0.0.1", "", false},
+		{"localhost", "", false},
+		{"::1", "", false},
+		{"", "secret", false},
+		{"0.0.0.0", "secret", false},
+		{"192.168.1.5", "secret", false},
+	}
+	for _, tt := range tests {
+		cfg := &Config{Server: ServerConfig{Host: tt.host, APIToken: tt.token}}
+		err := cfg.Validate()
+		if (err != nil) != tt.wantErr {
+			t.Errorf("host %q token %q: err = %v, wantErr %v", tt.host, tt.token, err, tt.wantErr)
+		}
+	}
+}

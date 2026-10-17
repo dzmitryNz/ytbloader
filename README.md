@@ -106,7 +106,8 @@ docker-compose up -d
 | `YTDLP_PATH` | Путь к бинарнику yt-dlp | `yt-dlp` |
 | `YTDLP_OUTPUT_DIR` | Директория для MP3 файлов | `./downloads` |
 | `YTDLP_MAX_CONCURRENT` | Сколько загрузок выполняется одновременно | `2` |
-| `API_TOKEN` | Токен для HTTP API (пусто — без аутентификации) | — |
+| `API_TOKEN` | Токен для HTTP API. Пустой токен допустим только при `SERVER_HOST` = loopback, иначе сервер не стартует | — |
+| `SERVER_HOST` | Адрес, на котором слушает API (пусто — все интерфейсы) | (пусто) |
 
 ## REST API
 
@@ -446,8 +447,6 @@ curl http://localhost:8070/api/tasks/1
 
 - [ ] Add GitHub Actions: `go vet`, `go test`, `golangci-lint`; bump `go 1.19` in `go.mod`.
 - [ ] Add tests for the downloader (argument building, stubbed yt-dlp) and `db`.
-- [ ] Refuse to start with an empty `API_TOKEN` when `SERVER_HOST` is not loopback.
-- [ ] Pass `API_TOKEN`, `SERVER_HOST` and `YTDLP_*` variables in `docker-compose.yml`.
 - [ ] Pin or auto-update yt-dlp; retry failed downloads with backoff.
 - [ ] Auto-download new videos from subscriptions; clean old files or limit disk space in `downloads/`.
 - [ ] Discord does not receive messages: `Start()` in `pkg/messenger/discord/discord.go` is an empty loop. Connect to the Discord gateway with [discordgo](https://github.com/bwmarrin/discordgo) and pass messages to the agent.
