@@ -635,3 +635,13 @@ func (db *DB) ListRecentNewVideos(since time.Time, limit int) ([]NewVideo, int, 
 	}
 	return videos, total, rows.Err()
 }
+
+func (db *DB) GetVideo(id int64) (*Video, error) {
+	v := &Video{}
+	err := db.conn.QueryRow(videoColumns+` FROM videos WHERE id = ?`, id).
+		Scan(&v.ID, &v.ChannelID, &v.URL, &v.Title, &v.Duration, &v.Published, &v.Position, &v.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
+}
