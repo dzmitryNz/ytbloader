@@ -256,3 +256,25 @@ func TestDownloadMarksWatchedOnlyWhenEnabled(t *testing.T) {
 		}
 	}
 }
+
+func TestDownloadPassesCookiesOnlyWhenSet(t *testing.T) {
+	for _, cookies := range []string{"", "/opt/cookies.txt"} {
+		d, argvFile, _ := stubEnv(t)
+		d.cookies = cookies
+
+		if _, err := d.Download(context.Background(), &DownloadRequest{URL: "https://example.com/v"}); err != nil {
+			t.Fatalf("Download: %v", err)
+		}
+
+		argv := readArgv(t, argvFile)
+		got := ""
+		for i, a := range argv {
+			if a == "--cookies" && i+1 < len(argv) {
+				got = argv[i+1]
+			}
+		}
+		if got != cookies {
+			t.Errorf("cookies=%q: --cookies value in argv = %q", cookies, got)
+		}
+	}
+}

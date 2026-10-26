@@ -70,6 +70,9 @@ type YTDLConfig struct {
 	PlayerClient     string `env:"YTDLP_PLAYER_CLIENT"`
 	// MarkWatched counts every download as a view for the creator.
 	MarkWatched bool `env:"YTDLP_MARK_WATCHED"`
+	// Cookies is the path to a Netscape cookies file of a YouTube account:
+	// without a login yt-dlp silently skips --mark-watched.
+	Cookies string `env:"YTDLP_COOKIES"`
 }
 
 func defaults() *Config {

@@ -40,6 +40,7 @@ func main() {
 		POTScript:        cfg.YTDL.POTScript,
 		PlayerClient:     cfg.YTDL.PlayerClient,
 		MarkWatched:      cfg.YTDL.MarkWatched,
+		Cookies:          cfg.YTDL.Cookies,
 	})
 
 	agt := agent.New(database, dl)
