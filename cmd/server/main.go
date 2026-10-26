@@ -39,6 +39,7 @@ func main() {
 		RemoteComponents: cfg.YTDL.RemoteComponents,
 		POTScript:        cfg.YTDL.POTScript,
 		PlayerClient:     cfg.YTDL.PlayerClient,
+		MarkWatched:      cfg.YTDL.MarkWatched,
 	})
 
 	agt := agent.New(database, dl)

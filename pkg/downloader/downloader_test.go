@@ -235,3 +235,24 @@ func TestDownloadRespectsContextCancel(t *testing.T) {
 		t.Fatal("Download did not return after the context was cancelled")
 	}
 }
+
+func TestDownloadMarksWatchedOnlyWhenEnabled(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		d, argvFile, _ := stubEnv(t)
+		d.markWatched = enabled
+
+		if _, err := d.Download(context.Background(), &DownloadRequest{URL: "https://example.com/v"}); err != nil {
+			t.Fatalf("Download: %v", err)
+		}
+
+		got := false
+		for _, a := range readArgv(t, argvFile) {
+			if a == "--mark-watched" {
+				got = true
+			}
+		}
+		if got != enabled {
+			t.Errorf("markWatched=%v: --mark-watched in argv = %v", enabled, got)
+		}
+	}
+}

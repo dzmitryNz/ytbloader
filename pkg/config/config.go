@@ -68,6 +68,8 @@ type YTDLConfig struct {
 	RemoteComponents string `env:"YTDLP_REMOTE_COMPONENTS"`
 	POTScript        string `env:"YTDLP_POT_SCRIPT"`
 	PlayerClient     string `env:"YTDLP_PLAYER_CLIENT"`
+	// MarkWatched counts every download as a view for the creator.
+	MarkWatched bool `env:"YTDLP_MARK_WATCHED"`
 }
 
 func defaults() *Config {
@@ -80,6 +82,7 @@ func defaults() *Config {
 			MaxConcurrent:    2,
 			RemoteComponents: "ejs:github",
 			PlayerClient:     "web_embedded",
+			MarkWatched:      true,
 		},
 		WebDir: "web",
 	}

@@ -22,6 +22,9 @@ type Downloader struct {
 	// baseArgs precede every yt-dlp invocation; they carry the JS runtime and
 	// PO token setup YouTube requires before it serves any media.
 	baseArgs []string
+	// markWatched makes yt-dlp report the video as watched, so a download
+	// counts as a view for the creator.
+	markWatched bool
 }
 
 // Options carry the yt-dlp extraction settings. Every field is optional: an
@@ -31,6 +34,7 @@ type Options struct {
 	RemoteComponents string
 	POTScript        string
 	PlayerClient     string
+	MarkWatched      bool
 }
 
 type DownloadRequest struct {
@@ -103,10 +107,11 @@ func New(binaryPath, outputDir string, maxConcurrent int, opts Options) *Downloa
 	}
 
 	return &Downloader{
-		binaryPath: binaryPath,
-		outputDir:  outputDir,
-		sem:        make(chan struct{}, maxConcurrent),
-		baseArgs:   baseArgs,
+		binaryPath:  binaryPath,
+		outputDir:   outputDir,
+		sem:         make(chan struct{}, maxConcurrent),
+		baseArgs:    baseArgs,
+		markWatched: opts.MarkWatched,
 	}
 }
 
@@ -153,14 +158,17 @@ func (d *Downloader) Download(ctx context.Context, req *DownloadRequest) (*Downl
 
 	// The end product is an mp3, so pulling the video stream only wastes
 	// bandwidth — and video formats are the ones YouTube guards hardest.
-	dlArgs := d.args(
+	dlArgs := []string{
 		"-f", "bestaudio/best",
 		"-o", outputTemplate,
 		"--print-to-file", "after_move:filename", pathFileName,
 		"--newline",
-		"--progress-template", "download:"+progressMarker+" %(progress._percent_str)s",
-		"--", req.URL,
-	)
+		"--progress-template", "download:" + progressMarker + " %(progress._percent_str)s",
+	}
+	if d.markWatched {
+		dlArgs = append(dlArgs, "--mark-watched")
+	}
+	dlArgs = d.args(append(dlArgs, "--", req.URL)...)
 
 	cmd := exec.CommandContext(ctx, d.binaryPath, dlArgs...)
 	stdout, _ := cmd.StdoutPipe()
