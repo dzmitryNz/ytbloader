@@ -126,7 +126,7 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.YTDL.MaxConcurrent != 2 || cfg.YTDL.RemoteComponents != "ejs:github" || cfg.YTDL.PlayerClient != "web_embedded" || cfg.YTDL.MarkWatched || cfg.YTDL.Cookies != "" {
+	if cfg.YTDL.MaxConcurrent != 2 || cfg.YTDL.RemoteComponents != "ejs:github" || cfg.YTDL.PlayerClient != "web_embedded" || !cfg.YTDL.MarkWatched || cfg.YTDL.Cookies != "" {
 		t.Errorf("unexpected yt-dlp defaults: %+v", cfg.YTDL)
 	}
 	if cfg.Database.Path != "ytbloader.db" || cfg.YTDL.OutputDir != "./downloads" || cfg.YTDL.BinaryPath != "yt-dlp" || cfg.WebDir != "web" {
