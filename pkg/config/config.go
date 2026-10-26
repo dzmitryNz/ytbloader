@@ -85,7 +85,7 @@ func defaults() *Config {
 			MaxConcurrent:    2,
 			RemoteComponents: "ejs:github",
 			PlayerClient:     "web_embedded",
-			MarkWatched:      true,
+			MarkWatched:      false,
 		},
 		WebDir: "web",
 	}
