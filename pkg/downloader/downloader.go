@@ -25,6 +25,9 @@ type Downloader struct {
 	// markWatched makes yt-dlp report the video as watched, so a download
 	// counts as a view for the creator.
 	markWatched bool
+	// cookies is a Netscape cookies file; yt-dlp only reports a view when it is
+	// logged in, so it is passed to downloads but not to listings.
+	cookies string
 }
 
 // Options carry the yt-dlp extraction settings. Every field is optional: an
@@ -35,6 +38,7 @@ type Options struct {
 	POTScript        string
 	PlayerClient     string
 	MarkWatched      bool
+	Cookies          string
 }
 
 type DownloadRequest struct {
@@ -112,6 +116,7 @@ func New(binaryPath, outputDir string, maxConcurrent int, opts Options) *Downloa
 		sem:         make(chan struct{}, maxConcurrent),
 		baseArgs:    baseArgs,
 		markWatched: opts.MarkWatched,
+		cookies:     opts.Cookies,
 	}
 }
 
@@ -164,6 +169,9 @@ func (d *Downloader) Download(ctx context.Context, req *DownloadRequest) (*Downl
 		"--print-to-file", "after_move:filename", pathFileName,
 		"--newline",
 		"--progress-template", "download:" + progressMarker + " %(progress._percent_str)s",
+	}
+	if d.cookies != "" {
+		dlArgs = append(dlArgs, "--cookies", d.cookies)
 	}
 	if d.markWatched {
 		dlArgs = append(dlArgs, "--mark-watched")
