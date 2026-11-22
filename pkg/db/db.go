@@ -415,7 +415,7 @@ func (db *DB) GetChannelByURL(url string, messengerID string, userID int64) (*Ch
 
 func (db *DB) ListChannels(messengerID string, userID int64) ([]Channel, error) {
 	rows, err := db.conn.Query(
-		channelColumns+` FROM channels WHERE messenger_id = ? AND user_id = ? ORDER BY created_at DESC`,
+		channelColumns+` FROM channels WHERE messenger_id = ? AND user_id = ? ORDER BY new_videos_count > 0 DESC, created_at DESC, id DESC`,
 		messengerID, userID,
 	)
 	if err != nil {
@@ -568,7 +568,7 @@ func (db *DB) CountVideos(channelID int64) (int, error) {
 }
 
 func (db *DB) ListAllChannels() ([]Channel, error) {
-	rows, err := db.conn.Query(channelColumns + ` FROM channels ORDER BY created_at DESC`)
+	rows, err := db.conn.Query(channelColumns + ` FROM channels ORDER BY new_videos_count > 0 DESC, created_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}

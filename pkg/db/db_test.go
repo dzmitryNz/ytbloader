@@ -506,3 +506,31 @@ func TestClearDownloadOutputPathKeepsStatus(t *testing.T) {
 		t.Errorf("download = %+v, want empty path, completed, size kept", got)
 	}
 }
+
+func TestListChannelsNewVideosFirst(t *testing.T) {
+	d := newTestDB(t)
+	var ids []int64
+	for _, u := range []string{"https://y/a", "https://y/b", "https://y/c"} {
+		c := &Channel{URL: u, Name: u, MessengerID: "telegram", UserID: 1}
+		if err := d.CreateChannel(c); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, c.ID)
+	}
+	// a is oldest, c is newest; only a has new videos.
+	if err := d.UpdateChannelNewVideosCount(ids[0], 3); err != nil {
+		t.Fatal(err)
+	}
+	for name, list := range map[string]func() ([]Channel, error){
+		"ListAllChannels": d.ListAllChannels,
+		"ListChannels":    func() ([]Channel, error) { return d.ListChannels("telegram", 1) },
+	} {
+		got, err := list()
+		if err != nil || len(got) != 3 {
+			t.Fatalf("%s: %v %v", name, got, err)
+		}
+		if got[0].ID != ids[0] || got[1].ID != ids[2] || got[2].ID != ids[1] {
+			t.Errorf("%s order = %d,%d,%d; want %d,%d,%d", name, got[0].ID, got[1].ID, got[2].ID, ids[0], ids[2], ids[1])
+		}
+	}
+}
