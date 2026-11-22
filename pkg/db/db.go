@@ -595,6 +595,11 @@ func (db *DB) UpdateVideoPublished(id int64, published time.Time) error {
 	return err
 }
 
+func (db *DB) UpdateChannelName(id int64, name string) error {
+	_, err := db.conn.Exec(`UPDATE channels SET name = ? WHERE id = ?`, name, id)
+	return err
+}
+
 func (db *DB) UpdateChannelNewVideosCount(id int64, count int) error {
 	_, err := db.conn.Exec(
 		`UPDATE channels SET new_videos_count = ? WHERE id = ?`, count, id,

@@ -444,8 +444,9 @@ func fileSize(path string) int64 {
 
 func (d *Downloader) GetChannelInfo(ctx context.Context, url string) (*ChannelInfo, error) {
 	args := d.args(
-		"--print", "%(channel)s|||%(channel_url)s",
-		"--playlist-items", "0",
+		"--print", "%(playlist_channel)s|||%(playlist_channel_url)s",
+		"--flat-playlist",
+		"--playlist-items", "1",
 		"--skip-download",
 		"--", url,
 	)
@@ -458,14 +459,15 @@ func (d *Downloader) GetChannelInfo(ctx context.Context, url string) (*ChannelIn
 		return nil, fmt.Errorf("failed to get channel info: %w", err)
 	}
 
-	result := strings.TrimSpace(stdout.String())
-
-	parts := strings.SplitN(result, "|||", 2)
-	if len(parts) < 2 {
-		return &ChannelInfo{Name: result, URL: url}, nil
+	line, _, _ := strings.Cut(strings.TrimSpace(stdout.String()), "\n")
+	name, chURL, _ := strings.Cut(line, "|||")
+	if name == "" || name == "NA" {
+		return nil, fmt.Errorf("channel name not found for %s", url)
 	}
-
-	return &ChannelInfo{Name: parts[0], URL: parts[1]}, nil
+	if chURL == "" || chURL == "NA" {
+		chURL = url
+	}
+	return &ChannelInfo{Name: name, URL: chURL}, nil
 }
 
 func (d *Downloader) GetChannelVideos(ctx context.Context, channelURL string, limit int) ([]VideoInfo, error) {
