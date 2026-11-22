@@ -59,6 +59,14 @@ func (f *fakeYT) GetVideoPublishDate(ctx context.Context, videoURL string) time.
 	return time.Time{}
 }
 
+func (f *fakeYT) SubtitleLangs(ctx context.Context, url string) ([]downloader.SubLang, error) {
+	return []downloader.SubLang{{Code: "ru"}, {Code: "en", Auto: true}}, nil
+}
+
+func (f *fakeYT) Subtitles(ctx context.Context, url, lang string, auto bool) (string, []byte, error) {
+	return "abc." + lang + ".srt", []byte("1\n00:00:00,000 --> 00:00:01,000\nhi\n"), nil
+}
+
 func (f *fakeYT) downloads() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
