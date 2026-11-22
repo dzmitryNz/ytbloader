@@ -24,6 +24,8 @@ type videoSource interface {
 	GetChannelInfo(ctx context.Context, url string) (*downloader.ChannelInfo, error)
 	GetChannelVideos(ctx context.Context, channelURL string, limit int) ([]downloader.VideoInfo, error)
 	GetVideoPublishDate(ctx context.Context, videoURL string) time.Time
+	SubtitleLangs(ctx context.Context, url string) ([]downloader.SubLang, error)
+	Subtitles(ctx context.Context, url, lang string, auto bool) (string, []byte, error)
 }
 
 type Server struct {
@@ -83,6 +85,8 @@ func (s *Server) routes(webDir string) http.Handler {
 	mux.HandleFunc("/api/video-downloads", s.videoDownloadsHandler)
 	mux.HandleFunc("/api/videos/new", s.newVideosHandler)
 	mux.HandleFunc("/api/videos/", s.videoHandler)
+	mux.HandleFunc("/api/subtitles", s.subtitlesHandler)
+	mux.HandleFunc("/api/subtitles/langs", s.subtitleLangsHandler)
 
 	if webDir != "" {
 		mux.Handle("/", http.FileServer(http.Dir(webDir)))

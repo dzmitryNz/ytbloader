@@ -22,6 +22,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 .input-row{display:flex;gap:8px}
 .input-row input{flex:1;padding:10px 14px;background:#0f0f0f;border:1px solid #444;border-radius:6px;color:#fff;font-size:14px;outline:none}
 .input-row input:focus{border-color:#667eea}
+.input-row select{flex:1;padding:10px 14px;background:#0f0f0f;border:1px solid #444;border-radius:6px;color:#fff;font-size:14px}
 .input-row button{padding:10px 20px;background:#667eea;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600}
 .input-row button:hover{background:#5a6fd6}
 .input-row button:disabled{opacity:.5;cursor:not-allowed}
@@ -128,6 +129,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 <div class="tabs">
 <button class="tab active" onclick="switchTab('downloads',this)">Downloads</button>
 <button class="tab" onclick="switchTab('subscriptions',this)">Subscriptions</button>
+<button class="tab" onclick="switchTab('subtitles',this)">Subtitles</button>
 </div>
 
 <div id="page-downloads" class="page active">
@@ -152,6 +154,21 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 </div>
 <label class="show-all"><input type="checkbox" id="show-all" onchange="setShowAll(this.checked)"> Show all (including downloaded)</label>
 <div id="sub-list" class="downloads"></div>
+</div>
+
+<div id="page-subtitles" class="page">
+<div class="add-form">
+<h2>Download subtitles</h2>
+<div class="input-row">
+<input type="text" id="subs-url" placeholder="https://www.youtube.com/watch?v=...">
+<button id="subs-langs-btn" onclick="loadSubLangs()">Find</button>
+</div>
+<div class="input-row" id="subs-pick" style="display:none;margin-top:8px">
+<select id="subs-lang"></select>
+<button id="subs-dl-btn" onclick="downloadSubs()">Download .srt</button>
+</div>
+<div id="subs-status" class="channel-meta"></div>
+</div>
 </div>
 </div>
 
@@ -226,7 +243,7 @@ function switchTab(tab, btn) {
   tabs.forEach(function(t) { t.classList.remove('active'); });
   document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
   if (btn) btn.classList.add('active');
-  else tabs[tab === 'downloads' ? 0 : 1].classList.add('active');
+  else tabs[['downloads', 'subscriptions', 'subtitles'].indexOf(tab)].classList.add('active');
   document.getElementById('page-' + tab).classList.add('active');
   if (tab === 'downloads') load();
   if (tab === 'subscriptions') loadSubs();
@@ -442,9 +459,72 @@ function renderVideos(channelId, videos) {
       (date ? '<span class="video-date"' + (dateTitle ? ' title="' + dateTitle + '"' : '') + '>' + date + '</span>' : '') +
       (dur ? '<span class="video-duration">' + dur + '</span>' : '') +
       '<a class="' + markClass + '" href="#" title="' + markTitle + '" onclick="toggleVideoDownloaded(event,\'' + esc(v.URL) + '\',' + channelId + ')">' + markLabel + '</a>' +
+      '<a class="video-dl" href="#" title="Subtitles" onclick="quickSubs(event,' + channelId + ',' + i + ')">Subs</a>' +
       '<a class="video-dl" href="#" onclick="quickDownload(event,' + channelId + ',' + i + ')">DL</a>' +
       '</div>';
   }).join('');
+}
+
+function quickSubs(e, channelId, idx) {
+  e.preventDefault();
+  document.getElementById('subs-url').value = videoUrls[channelId + '_' + idx];
+  switchTab('subtitles', null);
+  loadSubLangs();
+}
+
+function subsStatus(msg) { document.getElementById('subs-status').textContent = msg; }
+
+async function loadSubLangs() {
+  var url = document.getElementById('subs-url').value.trim();
+  var pick = document.getElementById('subs-pick');
+  pick.style.display = 'none';
+  if (!url) return;
+  var btn = document.getElementById('subs-langs-btn');
+  btn.disabled = true;
+  subsStatus('Looking for subtitles...');
+  try {
+    const res = await fetch(API + '/subtitles/langs?url=' + encodeURIComponent(url));
+    const data = await res.json();
+    if (!data.success) { subsStatus(data.error || 'Failed'); }
+    else if (!(data.data || []).length) { subsStatus('This video has no subtitles.'); }
+    else {
+      var sel = document.getElementById('subs-lang');
+      sel.innerHTML = data.data.map(function(l) {
+        return '<option value="' + esc(l.code) + '" data-auto="' + (l.auto ? 1 : 0) + '">' +
+          esc(l.code) + (l.auto ? ' (auto)' : '') + '</option>';
+      }).join('');
+      pick.style.display = '';
+      subsStatus('');
+    }
+  } catch(e) { subsStatus('Error: ' + e.message); }
+  btn.disabled = false;
+}
+
+async function downloadSubs() {
+  var url = document.getElementById('subs-url').value.trim();
+  var opt = document.getElementById('subs-lang').selectedOptions[0];
+  if (!url || !opt) return;
+  var btn = document.getElementById('subs-dl-btn');
+  btn.disabled = true;
+  subsStatus('Downloading...');
+  try {
+    const res = await fetch(API + '/subtitles?url=' + encodeURIComponent(url) +
+      '&lang=' + encodeURIComponent(opt.value) + '&auto=' + opt.dataset.auto);
+    if (!res.ok) {
+      var err = await res.json().catch(function() { return {}; });
+      subsStatus(err.error || 'Failed');
+    } else {
+      var cd = res.headers.get('Content-Disposition') || '';
+      var m = /filename="([^"]+)"/.exec(cd);
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(await res.blob());
+      a.download = m ? m[1] : 'subtitles.' + opt.value + '.srt';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      subsStatus('Saved ' + a.download);
+    }
+  } catch(e) { subsStatus('Error: ' + e.message); }
+  btn.disabled = false;
 }
 
 function quickDownload(e, channelId, idx) {
