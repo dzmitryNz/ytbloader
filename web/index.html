@@ -69,6 +69,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 .video-item{display:flex;justify-content:space-between;align-items:flex-start;padding:8px 0;border-bottom:1px solid #222;gap:12px;position:relative}
 .video-item:last-child{border-bottom:none}
 .video-title{font-size:13px;color:#ccc;flex:1;min-width:0;word-wrap:break-word;overflow-wrap:break-word;line-height:1.3}
+.show-all{display:block;margin:8px 0;font-size:13px;color:#888;cursor:pointer}
 .video-item.downloaded .video-title{color:#888}
 .video-downloaded{color:#00cc44;font-size:12px;margin-left:4px}
 .video-date{font-size:11px;color:#666;flex-shrink:0;white-space:nowrap}
@@ -149,6 +150,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f0f;color:#e0
 <button id="refresh-all-btn" class="btn-icon" title="Refresh all subscriptions" onclick="refreshAllChannels()">&#8635;</button>
 </div>
 </div>
+<label class="show-all"><input type="checkbox" id="show-all" onchange="setShowAll(this.checked)"> Show all (including downloaded)</label>
 <div id="sub-list" class="downloads"></div>
 </div>
 </div>
@@ -392,14 +394,32 @@ async function toggleVideos(id) {
   } catch(e) { el.innerHTML = '<div class="empty">Failed to load videos</div>'; }
 }
 
+var videosCache = {};
+var showAll = false;
+try { showAll = localStorage.getItem('showAll') === '1'; } catch(e) {}
+document.getElementById('show-all').checked = showAll;
+function setShowAll(on) {
+  showAll = on;
+  try { localStorage.setItem('showAll', on ? '1' : '0'); } catch(e) {}
+  Object.keys(videosCache).forEach(function(id) {
+    var el = document.getElementById('vids-' + id);
+    if (el && el.classList.contains('open')) renderVideos(id, videosCache[id]);
+  });
+}
+
 function renderVideos(channelId, videos) {
   const el = document.getElementById('vids-' + channelId);
   if (!el) return;
+  videosCache[channelId] = videos;
   if (!videos.length) { el.innerHTML = '<div class="empty">No videos found. Click Refresh to check for new ones.</div>'; return; }
   videos.forEach(function(v, i) {
     videoUrls[channelId + '_' + i] = v.URL;
   });
-  el.innerHTML = videos.map(function(v, i) {
+  var shown = videos.map(function(v, i) { return [v, i]; })
+    .filter(function(p) { return showAll || !p[0].IsDownloaded; });
+  if (!shown.length) { el.innerHTML = '<div class="empty">All videos are downloaded. Tick "Show all" to see them.</div>'; return; }
+  el.innerHTML = shown.map(function(p) {
+    var v = p[0], i = p[1];
     var dur = v.Duration > 0 ? formatDuration(v.Duration) : '';
     // Until the real publish date is fetched, fall back to when the video
     // first appeared in the list; "~" marks it as approximate.
