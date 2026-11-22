@@ -520,6 +520,13 @@ func (s *Server) refreshSubscription(w http.ResponseWriter, r *http.Request, id 
 
 	oldLastCheck := channel.LastCheck
 
+	// Subscriptions created before names worked have an empty one: backfill.
+	if channel.Name == "" {
+		if info, err := s.downloader.GetChannelInfo(r.Context(), channel.URL); err == nil {
+			_ = s.db.UpdateChannelName(channelID, info.Name)
+		}
+	}
+
 	videos, err := s.downloader.GetChannelVideos(r.Context(), channel.URL, 30)
 	if err != nil {
 		s.respondError(w, fmt.Sprintf("Failed to fetch videos: %v", err), http.StatusInternalServerError)
