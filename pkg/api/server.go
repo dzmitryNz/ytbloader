@@ -416,7 +416,7 @@ func (s *Server) channelVideosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit := 50
+	limit := db.VideoListLimit
 	videos, err := s.db.GetVideosByChannel(channelID, limit)
 	if err != nil {
 		s.respondError(w, "Failed to list videos", http.StatusInternalServerError)
@@ -550,7 +550,7 @@ func (s *Server) refreshSubscription(w http.ResponseWriter, r *http.Request, id 
 		s.db.UpsertVideo(video)
 	}
 
-	dbVideos, _ := s.db.GetVideosByChannel(channelID, 50)
+	dbVideos, _ := s.db.GetVideosByChannel(channelID, db.VideoListLimit)
 	// Only successful lookups count against the limit, so one video with an
 	// unavailable date cannot starve the rest forever. Attempts are capped
 	// separately to keep a refresh from stalling on a broken channel.
@@ -576,7 +576,7 @@ func (s *Server) refreshSubscription(w http.ResponseWriter, r *http.Request, id 
 
 	// Re-read so the response carries the dates filled in above, plus the
 	// downloaded flags the video list renderer expects.
-	dbVideos, _ = s.db.GetVideosByChannel(channelID, 50)
+	dbVideos, _ = s.db.GetVideosByChannel(channelID, db.VideoListLimit)
 
 	s.respond(w, Response{Success: true, Data: map[string]interface{}{
 		"videos":   s.withDownloadedFlags(dbVideos),

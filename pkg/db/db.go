@@ -366,9 +366,14 @@ func (db *DB) CreateChannel(c *Channel) error {
 	).Scan(&c.ID)
 }
 
+// VideoListLimit is how many videos per channel the UI lists; the new-videos
+// badge counts only those, so it never promises videos the list cannot show.
+const VideoListLimit = 50
+
 const channelColumns = `SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at,
-	(SELECT COUNT(*) FROM videos v WHERE v.channel_id = channels.id
-		AND datetime(v.created_at) > datetime(channels.created_at, '+2 minutes')
+	(SELECT COUNT(*) FROM (SELECT * FROM videos WHERE channel_id = channels.id
+		ORDER BY position ASC, id DESC LIMIT 50) v
+		WHERE datetime(v.created_at) > datetime(channels.created_at, '+2 minutes')
 		AND v.url NOT IN (SELECT url FROM downloads WHERE status = 'completed')
 		AND v.url NOT IN (SELECT url FROM video_downloads)) AS new_count,
 	COALESCE(auto_download, 0), COALESCE(auto_chat_id, 0), COALESCE(auto_messenger, '')`

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"database/sql"
 	"errors"
 	"path/filepath"
@@ -266,6 +267,22 @@ func TestChannelNewVideosCountIsDerivedFromUndownloaded(t *testing.T) {
 	}
 	if got := count(); got != 1 {
 		t.Fatalf("count after one download = %d, want 1", got)
+	}
+}
+
+func TestChannelNewVideosCountOnlyCoversListedWindow(t *testing.T) {
+	d := newTestDB(t)
+	c := newChannel(t, d, "https://y/chan")
+	ageChannel(t, d, c, "2020-01-01 00:00:00")
+	for i := 0; i < VideoListLimit+5; i++ {
+		addVideoAt(t, d, c, fmt.Sprintf("https://y/%d", i), i, "2024-01-01 00:00:00")
+	}
+	got, err := d.GetChannel(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NewVideosCount != VideoListLimit {
+		t.Fatalf("count = %d, want %d (videos past the list window are not shown)", got.NewVideosCount, VideoListLimit)
 	}
 }
 
