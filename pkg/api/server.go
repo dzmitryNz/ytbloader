@@ -416,8 +416,6 @@ func (s *Server) channelVideosHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = s.db.ResetChannelNewVideosCount(channelID)
-
 	limit := 50
 	videos, err := s.db.GetVideosByChannel(channelID, limit)
 	if err != nil {
@@ -575,7 +573,6 @@ func (s *Server) refreshSubscription(w http.ResponseWriter, r *http.Request, id 
 	_ = s.db.UpdateChannelLastCheck(channelID)
 
 	newCount, _ := s.db.CountNewVideosSince(channelID, oldLastCheck)
-	_ = s.db.UpdateChannelNewVideosCount(channelID, newCount)
 
 	// Re-read so the response carries the dates filled in above, plus the
 	// downloaded flags the video list renderer expects.

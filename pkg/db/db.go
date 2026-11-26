@@ -366,7 +366,11 @@ func (db *DB) CreateChannel(c *Channel) error {
 	).Scan(&c.ID)
 }
 
-const channelColumns = `SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at, new_videos_count,
+const channelColumns = `SELECT id, url, name, messenger_id, user_id, chat_id, last_check, created_at,
+	(SELECT COUNT(*) FROM videos v WHERE v.channel_id = channels.id
+		AND datetime(v.created_at) > datetime(channels.created_at, '+2 minutes')
+		AND v.url NOT IN (SELECT url FROM downloads WHERE status = 'completed')
+		AND v.url NOT IN (SELECT url FROM video_downloads)) AS new_count,
 	COALESCE(auto_download, 0), COALESCE(auto_chat_id, 0), COALESCE(auto_messenger, '')`
 
 type rowScanner interface {
@@ -415,7 +419,7 @@ func (db *DB) GetChannelByURL(url string, messengerID string, userID int64) (*Ch
 
 func (db *DB) ListChannels(messengerID string, userID int64) ([]Channel, error) {
 	rows, err := db.conn.Query(
-		channelColumns+` FROM channels WHERE messenger_id = ? AND user_id = ? ORDER BY new_videos_count > 0 DESC, created_at DESC, id DESC`,
+		channelColumns+` FROM channels WHERE messenger_id = ? AND user_id = ? ORDER BY new_count > 0 DESC, created_at DESC, id DESC`,
 		messengerID, userID,
 	)
 	if err != nil {
@@ -568,7 +572,7 @@ func (db *DB) CountVideos(channelID int64) (int, error) {
 }
 
 func (db *DB) ListAllChannels() ([]Channel, error) {
-	rows, err := db.conn.Query(channelColumns + ` FROM channels ORDER BY new_videos_count > 0 DESC, created_at DESC, id DESC`)
+	rows, err := db.conn.Query(channelColumns + ` FROM channels ORDER BY new_count > 0 DESC, created_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -597,20 +601,6 @@ func (db *DB) UpdateVideoPublished(id int64, published time.Time) error {
 
 func (db *DB) UpdateChannelName(id int64, name string) error {
 	_, err := db.conn.Exec(`UPDATE channels SET name = ? WHERE id = ?`, name, id)
-	return err
-}
-
-func (db *DB) UpdateChannelNewVideosCount(id int64, count int) error {
-	_, err := db.conn.Exec(
-		`UPDATE channels SET new_videos_count = ? WHERE id = ?`, count, id,
-	)
-	return err
-}
-
-func (db *DB) ResetChannelNewVideosCount(id int64) error {
-	_, err := db.conn.Exec(
-		`UPDATE channels SET new_videos_count = 0 WHERE id = ?`, id,
-	)
 	return err
 }
 

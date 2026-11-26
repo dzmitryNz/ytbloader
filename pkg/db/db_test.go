@@ -244,23 +244,28 @@ func TestDownloadedVideoURLs(t *testing.T) {
 	}
 }
 
-func TestChannelNewVideosCount(t *testing.T) {
+func TestChannelNewVideosCountIsDerivedFromUndownloaded(t *testing.T) {
 	d := newTestDB(t)
 	c := newChannel(t, d, "https://y/chan")
+	ageChannel(t, d, c, "2020-01-01 00:00:00")
+	addVideoAt(t, d, c, "https://y/a", 0, "2024-01-01 00:00:00")
+	addVideoAt(t, d, c, "https://y/b", 1, "2024-01-01 00:00:00")
 
-	if err := d.UpdateChannelNewVideosCount(c.ID, 5); err != nil {
+	count := func() int {
+		got, err := d.GetChannel(c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.NewVideosCount
+	}
+	if got := count(); got != 2 {
+		t.Fatalf("count = %d, want 2", got)
+	}
+	if err := d.MarkVideoDownloaded("https://y/a"); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := d.GetChannel(c.ID)
-	if got.NewVideosCount != 5 {
-		t.Errorf("NewVideosCount = %d, want 5", got.NewVideosCount)
-	}
-	if err := d.ResetChannelNewVideosCount(c.ID); err != nil {
-		t.Fatal(err)
-	}
-	got, _ = d.GetChannel(c.ID)
-	if got.NewVideosCount != 0 {
-		t.Errorf("NewVideosCount after reset = %d, want 0", got.NewVideosCount)
+	if got := count(); got != 1 {
+		t.Fatalf("count after one download = %d, want 1", got)
 	}
 }
 
@@ -518,9 +523,8 @@ func TestListChannelsNewVideosFirst(t *testing.T) {
 		ids = append(ids, c.ID)
 	}
 	// a is oldest, c is newest; only a has new videos.
-	if err := d.UpdateChannelNewVideosCount(ids[0], 3); err != nil {
-		t.Fatal(err)
-	}
+	ageChannel(t, d, &Channel{ID: ids[0]}, "2020-01-01 00:00:00")
+	addVideoAt(t, d, &Channel{ID: ids[0]}, "https://y/a/v1", 0, "2024-01-01 00:00:00")
 	for name, list := range map[string]func() ([]Channel, error){
 		"ListAllChannels": d.ListAllChannels,
 		"ListChannels":    func() ([]Channel, error) { return d.ListChannels("telegram", 1) },
